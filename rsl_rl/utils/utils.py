@@ -59,9 +59,20 @@ def split_and_pad_trajectories(tensor, dones):
     # Extract the individual trajectories
     trajectories = torch.split(tensor.transpose(1, 0).flatten(0, 1),trajectory_lengths_list)
     padded_trajectories = torch.nn.utils.rnn.pad_sequence(trajectories)
+    # pad_sequence only pads up to the longest actual trajectory, which can be
+    # shorter than num_steps_per_env when all episodes terminate early.
+    # We must extend to exactly num_steps_per_env rows so that:
+    #   1) trajectory_masks (shape [num_steps, num_traj]) matches padded_trajectories
+    #      during boolean indexing in unpad_trajectories, and
+    #   2) unpad_trajectories can view the result as (-1, num_steps, hidden) to
+    #      reconstruct the original [num_steps, num_envs, hidden] shape.
+    num_steps = tensor.shape[0]
+    pad_len = num_steps - padded_trajectories.shape[0]
+    if pad_len > 0:
+        extra_pad = padded_trajectories.new_zeros(pad_len, *padded_trajectories.shape[1:])
+        padded_trajectories = torch.cat([padded_trajectories, extra_pad], dim=0)
 
-
-    trajectory_masks = trajectory_lengths > torch.arange(0, tensor.shape[0], device=tensor.device).unsqueeze(1)
+    trajectory_masks = trajectory_lengths > torch.arange(0, num_steps, device=tensor.device).unsqueeze(1)
     return padded_trajectories, trajectory_masks
 
 def unpad_trajectories(trajectories, masks):

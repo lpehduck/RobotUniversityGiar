@@ -119,6 +119,9 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             env_cfg.env.num_envs = args.num_envs
         if args.debug:
             env_cfg.env.debug = args.debug
+        if args.motion_file is not None:
+            env_cfg.env.motion_file = args.motion_file
+            
     # training parameters
     if cfg_train is not None:
         # alg runner parameters
@@ -156,6 +159,9 @@ def get_args():
     parser.add_argument('--use_joystick',   action='store_true', default=False, help="use joystick to provide commands")
     parser.add_argument('--joystick_type',  type=str, default='xbox', help="type of joystick: xbox, switch")
     parser.add_argument('--follow_robot',   action='store_true', default=False, help="whether the camera follows the robot during play")
+    parser.add_argument('--motion_file',    type=str, 
+                        default=None, 
+                        help="motion file to load")
 
     return parser.parse_args()
 

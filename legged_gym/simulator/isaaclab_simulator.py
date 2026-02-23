@@ -51,6 +51,7 @@ class IsaacLabSimulator(Simulator):
         self._projected_gravity[:] = quat_rotate_inverse(self._base_quat, self._global_gravity)[:]
         self._base_lin_vel[:] = quat_rotate_inverse(self._base_quat, self._robot.data.root_link_lin_vel_w)[:]
         self._base_ang_vel[:] = quat_rotate_inverse(self._base_quat, self._robot.data.root_link_ang_vel_w)[:]
+        self._key_body_pos[:] = self._robot.data.body_link_pos_w[:, self._key_body_indices, :]
         self._feet_pos[:] = self._robot.data.body_link_pos_w[:, self._feet_indices, :]
         self._feet_vel[:] = self._robot.data.body_link_vel_w[:, self._feet_indices, :3]
         # Link contact state
@@ -92,6 +93,7 @@ class IsaacLabSimulator(Simulator):
         self._base_lin_vel[:] = quat_rotate_inverse(self._base_quat, self._robot.data.root_link_lin_vel_w)[:]
         self._base_ang_vel[:] = quat_rotate_inverse(self._base_quat, self._robot.data.root_link_ang_vel_w)[:]
         self._feet_pos[:] = self._robot.data.body_link_pos_w[:, self._feet_indices, :]
+        self._key_body_pos[:] = self._robot.data.body_link_pos_w[:, self._key_body_indices, :]
         self._feet_vel[:] = self._robot.data.body_link_vel_w[:, self._feet_indices, :3]
         # Link contact state
         if self._cfg.asset.obtain_link_contact_states:
@@ -396,6 +398,7 @@ class IsaacLabSimulator(Simulator):
         assert len(self._feet_indices) > 0
         # get base link index in the robot articulation
         self._base_link_index = self._robot.body_names.index(self._cfg.asset.base_link_name)
+        self._key_body_indices = find_link_indices(self._cfg.asset.key_bodies)
         
         if self._cfg.asset.obtain_link_contact_states:
             self._contact_state_link_indices = find_link_indices(
@@ -444,6 +447,7 @@ class IsaacLabSimulator(Simulator):
         )
         self._feet_pos = torch.zeros_like(self._robot.data.body_link_pos_w[:, self._feet_indices, :])
         self._feet_vel = torch.zeros_like(self._robot.data.body_link_vel_w[:, self._feet_indices, :3])
+        self._key_body_pos = torch.zeros_like(self._robot.data.body_link_pos_w[:, self._key_body_indices, :])
         self._last_feet_vel = torch.zeros_like(self._robot.data.body_link_vel_w[:, self._feet_indices, :3])
         # depth images
         if self._cfg.sensor.add_depth:

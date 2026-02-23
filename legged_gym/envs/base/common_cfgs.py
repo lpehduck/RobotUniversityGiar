@@ -129,7 +129,7 @@ class Go2RoughCommonCfg(Go2FlatCommonCfg):
             feet_contact_stand_still = 0.5
 
 
-#----- Common configuration for Unitree G1 on flat terrain -----#
+#----- Common configuration for Unitree G1 on flat terrain (12DOF) -----#
 class G1FlatCommonCfg(LeggedRobotCfg):
     class terrain(LeggedRobotCfg.terrain):
         mesh_type = "plane"
@@ -172,4 +172,93 @@ class G1FlatCommonCfg(LeggedRobotCfg):
             "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
             "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
             "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint"
+        ]
+
+
+#----- Common configuration for Unitree G1 DeepMimic (29DOF) -----#
+class G1MimicCommonCfg(LeggedRobotCfg):
+    class terrain(LeggedRobotCfg.terrain):
+        mesh_type = "plane"
+
+    class init_state(LeggedRobotCfg.init_state):
+        pos = [0.0, 0.0, 0.8]  # x,y,z [m]
+        default_joint_angles = {
+            'left_hip_pitch_joint': -0.1,
+            'left_hip_roll_joint': 0,
+            'left_hip_yaw_joint': 0.,
+            'left_knee_joint': 0.3,
+            'left_ankle_pitch_joint': -0.2,
+            'left_ankle_roll_joint': 0,
+            'right_hip_pitch_joint': -0.1,
+            'right_hip_roll_joint': 0,
+            'right_hip_yaw_joint': 0.,
+            'right_knee_joint': 0.3,
+            'right_ankle_pitch_joint': -0.2,
+            'right_ankle_roll_joint': 0,
+            'waist_yaw_joint': 0.,
+            'waist_roll_joint': 0,
+            'waist_pitch_joint': 0,
+            'left_shoulder_pitch_joint': 0.0,
+            'left_shoulder_roll_joint': 0.2,
+            'left_shoulder_yaw_joint': 0.0,
+            'left_elbow_joint': 1.1,
+            'left_wrist_roll_joint': 0.0,
+            'left_wrist_pitch_joint': 0.0,
+            'left_wrist_yaw_joint': 0.0,
+            'right_shoulder_pitch_joint': 0.0,
+            'right_shoulder_roll_joint': -0.2,
+            'right_shoulder_yaw_joint': 0.0,
+            'right_elbow_joint': 1.1,
+            'right_wrist_roll_joint': 0.0,
+            'right_wrist_pitch_joint': 0.0,
+            'right_wrist_yaw_joint': 0.0,
+        }
+
+    class control(LeggedRobotCfg.control):
+        control_type = 'P'
+        stiffness = {'hip_yaw': 150., 
+                     'hip_roll': 150., 
+                     'hip_pitch': 200., 
+                     'knee': 200., 
+                     'ankle': 20.,
+                     'waist': 200.,
+                     'shoulder': 40.,
+                     'elbow': 40.,
+                     'wrist': 40.,
+                     }
+        damping = {'hip_yaw': 5.0, 
+                   'hip_roll': 5.0, 
+                   'hip_pitch': 5.0, 
+                   'knee': 5.0, 
+                   'ankle': 2,
+                   'waist': 5.0,
+                   'shoulder': 10.0,
+                   'elbow': 10.0,
+                   'wrist': 10.0,
+                   }
+        action_scale = 0.25
+        decimation = 4
+
+    class asset(LeggedRobotCfg.asset):
+        name = "g1"
+        file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/g1_description/g1_29dof.urdf'
+        foot_name = "ankle_roll"
+        key_bodies = ["ankle_roll", "head", "wrist_yaw"]
+        penalize_contacts_on = ["torso", "hip", "knee", "hand", 
+                                "shoulder", "elbow", "wrist"]
+        terminate_after_contacts_on = ["pelvis"]
+        base_link_name = "pelvis"
+        self_collisions = 0
+        flip_visual_attachments = False
+        dof_names = [
+            "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",
+            "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+            "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
+            "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
+            'waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint',
+            'left_shoulder_pitch_joint', 'left_shoulder_roll_joint', 'left_shoulder_yaw_joint',
+            'left_elbow_joint', 'left_wrist_roll_joint', 'left_wrist_pitch_joint',
+            'left_wrist_yaw_joint', 'right_shoulder_pitch_joint', 'right_shoulder_roll_joint',
+            'right_shoulder_yaw_joint', 'right_elbow_joint',
+            'right_wrist_roll_joint', 'right_wrist_pitch_joint', 'right_wrist_yaw_joint',
         ]

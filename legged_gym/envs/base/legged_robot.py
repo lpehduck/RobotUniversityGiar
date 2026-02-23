@@ -295,13 +295,16 @@ class LeggedRobot(BaseTask):
         base_lin_vel = torch_rand_float(-0.5, 0.5, (len(env_ids), 3), self.device)
         # base ang vel
         base_ang_vel = torch_rand_float(-0.5, 0.5, (len(env_ids), 3), self.device)
-        self.simulator.reset_root_states(env_ids, base_pos, base_quat, base_lin_vel, base_ang_vel)
+        self.simulator.reset_root_states(env_ids, 
+                                         base_pos, 
+                                         base_quat, 
+                                         base_lin_vel, 
+                                         base_ang_vel)
 
     def _post_physics_step_callback(self):
         """ Callback called before computing terminations, rewards, and observations
             Default behaviour: Compute ang vel command based on target and heading, compute measured terrain heights and randomly push robots
         """
-        #
         env_ids = (self.episode_length_buf % int(self.cfg.commands.resampling_time / self.dt) == 0).nonzero(as_tuple=False).flatten()
         self._resample_commands(env_ids)
         if self.cfg.commands.heading_command:
@@ -606,3 +609,10 @@ class LeggedRobot(BaseTask):
         '''reward for foot acceleration'''
         foot_acc = (self.simulator.feet_vel - self.simulator.last_feet_vel) / self.dt
         return torch.sum(torch.square(foot_acc), dim=(1, 2))
+    
+    def _reward_feet_slip(self):
+        '''penalize foot slip when in contact with the ground'''
+        foot_vel_xy_norm = torch.norm(self.simulator.feet_vel[:, :, :2], dim=-1)
+        contacts = self.simulator.link_contact_forces[:, self.simulator.feet_contact_indices, 2] > 0.1
+        slip_penalty = torch.sum(foot_vel_xy_norm * contacts, dim=1)
+        return slip_penalty

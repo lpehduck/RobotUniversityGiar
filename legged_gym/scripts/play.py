@@ -68,11 +68,6 @@ def override_configs(env_cfg, args):
     
     if args.use_joystick:
         env_cfg.commands.heading_command = False
-    
-    env_cfg.commands.ranges.lin_vel_x = [0.0, 0.0]
-    env_cfg.commands.ranges.lin_vel_y = [0.0, 0.0]
-    env_cfg.commands.ranges.ang_vel_yaw = [0.0, 0.0]
-    env_cfg.commands.ranges.heading = [0.0, 0.0]
 
 def print_debug_info(env, robot_index):
     """Print debug information while interacting
@@ -118,11 +113,6 @@ def interaction_loop(env, policy, args):
     # Setup joystick if needed
     if args.use_joystick:
         joystick = Joystick(joystick_type=args.joystick_type)
-    
-    # env.commands[:, 0] = 0.5
-    # env.commands[:, 1] = 0
-    # env.commands[:, 2] = 0
-    # env.commands[:, 3] = 0
     
     # interaction loop
     for i in range(10*int(env.max_episode_length)):

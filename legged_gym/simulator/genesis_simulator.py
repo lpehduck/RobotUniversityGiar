@@ -49,6 +49,7 @@ class GenesisSimulator(Simulator):
         self._link_contact_forces[:] = self._robot.get_links_net_contact_force()
         self._feet_pos[:] = self._robot.get_links_pos()[:, self._feet_indices, :]
         self._feet_vel[:] = self._robot.get_links_vel()[:, self._feet_indices, :]
+        self._key_body_pos[:] = self._robot.get_links_pos()[:, self._key_body_indices, :]
         # Link contact state
         if self._cfg.asset.obtain_link_contact_states:
             self._link_contact_states = 1. * (torch.norm(
@@ -102,12 +103,6 @@ class GenesisSimulator(Simulator):
         self._robot.zero_all_dofs_velocity(env_ids)
 
     def reset_root_states(self, env_ids, base_pos, base_quat, base_lin_vel, base_ang_vel):
-        """ Resets ROOT states position and velocities of selected environmments
-            Sets base position based on the curriculum
-            Selects randomized base velocities within -0.5:0.5 [m/s, rad/s]
-        Args:
-            env_ids (List[int]): Environemnt ids
-        """
         # base pos
         self._base_pos[env_ids, :] = base_pos[:]
         self._robot.set_pos(
@@ -329,7 +324,7 @@ class GenesisSimulator(Simulator):
             name).dof_start for name in self._cfg.asset.dof_names]
         print(f"motor dof indices: {self._dof_indices}")
         
-        # find link indices, termination links, penalized links, and feet
+        # find indices of links specified in the config
         def find_link_indices(names):
             link_indices = list()
             for link in self._robot.links:
@@ -354,6 +349,8 @@ class GenesisSimulator(Simulator):
         self._feet_indices = find_link_indices(self._feet_names)
         print(f"feet names: {self._feet_names}, feet link indices: {self._feet_indices}")
         assert len(self._feet_indices) > 0
+        self._key_body_indices = find_link_indices(self._cfg.asset.key_bodies)
+        print(f"key body link indices: {self._key_body_indices}")
         self._base_link_index = self._robot.base_link_idx - self._robot.link_start
         print(f"base link index: {self._base_link_index}")
         
@@ -441,6 +438,9 @@ class GenesisSimulator(Simulator):
         )
         self._feet_vel = torch.zeros(
             (self._num_envs, len(self._feet_indices), 3), device=self._device, dtype=torch.float
+        )
+        self._key_body_pos = torch.zeros(
+            (self._num_envs, len(self._key_body_indices), 3), device=self._device, dtype=torch.float
         )
         self._last_feet_vel = torch.zeros_like(self._feet_vel)
         # depth images

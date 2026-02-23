@@ -86,6 +86,7 @@ class LeggedRobotCfg(BaseConfig):
         file = ""
         # name of the feet bodies, bodies containing this substring will be considered as feet
         foot_name = ""
+        key_bodies = [] # list of important bodies to be tracked in mimic tasks
         penalize_contacts_on = [] # penalize contacts on links containing these substrings
         terminate_after_contacts_on = [] # terminate episode after contacts on links containing these substrings
         fix_base_link = False    # fix base link to the world
@@ -275,6 +276,7 @@ class LeggedRobotCfgPPO(BaseConfig):
     seed = 1
     runner_class_name = 'OnPolicyRunner'
     class policy:
+        clip_actions = LeggedRobotCfg.normalization.clip_actions
         init_noise_std = 1.0
         actor_hidden_dims = [512, 256, 128]
         critic_hidden_dims = [512, 256, 128]

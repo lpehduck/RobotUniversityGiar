@@ -71,6 +71,7 @@ class IsaacGymSimulator(Simulator):
             self._base_quat, self._global_gravity)
         self._feet_vel = self._rigid_body_states[:, self._feet_indices, 7:10]
         self._feet_pos = self._rigid_body_states[:, self._feet_indices, 0:3]
+        self._key_body_pos = self._rigid_body_states[:, self._key_body_indices, 0:3]
         # Link contact state
         if self._cfg.asset.obtain_link_contact_states:
             self._link_contact_states = 1. * (torch.norm(
@@ -276,6 +277,9 @@ class IsaacGymSimulator(Simulator):
         termination_contact_names = []
         for name in self._cfg.asset.terminate_after_contacts_on:
             termination_contact_names.extend([s for s in self._body_names if name in s])
+        key_body_names = []
+        for name in self._cfg.asset.key_bodies:
+            key_body_names.extend([s for s in self._body_names if name in s])
         if self._cfg.asset.obtain_link_contact_states:
             contact_state_link_names = []
             for name in self._cfg.asset.contact_state_link_names:
@@ -328,6 +332,12 @@ class IsaacGymSimulator(Simulator):
         self._base_link_index = self._gym.find_actor_rigid_body_handle(self._envs[0], self._actor_handles[0], self._cfg.asset.base_link_name)
         print(f"Base link index: {self._base_link_index}")
         
+        self._key_body_indices = torch.zeros(len(key_body_names), dtype=torch.long, device=self._device, requires_grad=False)
+        for i in range(len(key_body_names)):
+            self._key_body_indices[i] = self._gym.find_actor_rigid_body_handle(self._envs[0], self._actor_handles[0], key_body_names[i])
+        print(f"Key body names: {key_body_names}")
+        print(f"Key body indices: {self._key_body_indices}")
+        
         if self._cfg.asset.obtain_link_contact_states:
             self._contact_state_link_indices = torch.zeros(len(contact_state_link_names), dtype=torch.long, device=self._device, requires_grad=False)
             for i in range(len(contact_state_link_names)):
@@ -373,6 +383,7 @@ class IsaacGymSimulator(Simulator):
         self._link_contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self._num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
         self._feet_vel = self._rigid_body_states[:, self._feet_indices, 7:10]
         self._feet_pos = self._rigid_body_states[:, self._feet_indices, 0:3]
+        self._key_body_pos = self._rigid_body_states[:, self._key_body_indices, 0:3]
         self._last_feet_vel = torch.zeros_like(self._feet_vel)
 
         # initialize some data used later on

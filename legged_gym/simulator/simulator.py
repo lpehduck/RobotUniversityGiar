@@ -57,7 +57,7 @@ class Simulator(ABC):
         Args:
             env_ids (Tensor): Environment IDs to reset.
             base_pos (Tensor): Base positions to reset.
-            base_quat (Tensor): Base orientations (quaternions) to reset.
+            base_quat (Tensor): Base orientations (quaternions, xyzw sequence) to reset.
             base_lin_vel (Tensor): Base linear velocities to reset.
             base_ang_vel (Tensor): Base angular velocities to reset.
         """
@@ -395,6 +395,15 @@ class Simulator(ABC):
             Tensor((num_envs, num_feet, 3)): Positions of the feet in the world frame.
         """
         return self._feet_pos
+    
+    @property
+    def key_body_pos(self):
+        """Returns the positions of the key bodies in the world frame.
+
+        Returns:
+            Tensor((num_envs, num_key_bodies, 3)): Positions of the key bodies in the world frame.
+        """
+        return self._key_body_pos
     
     @property
     def feet_vel(self):
