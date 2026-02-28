@@ -1,3 +1,5 @@
+import time
+
 from legged_gym import *
 import os
 
@@ -18,7 +20,7 @@ def override_configs(env_cfg, args):
     task_name = args.task
     # override some parameters for testing
     # number of environments
-    env_cfg.env.num_envs = min(env_cfg.env.num_envs, 32)
+    env_cfg.env.num_envs = min(env_cfg.env.num_envs, 16)
     if "cts" in task_name:  # cts specific
         env_cfg.env.num_teacher = 1
     env_cfg.viewer.rendered_envs_idx = list(range(env_cfg.env.num_envs))
@@ -82,6 +84,7 @@ def print_debug_info(env, robot_index):
     # print("base height: ", env.simulator.base_pos[robot_index, 2].cpu().numpy())
     # print("foot_height: ", env.simulator.feet_pos[robot_index, :, 2].cpu().numpy())
     # print(f"ankle pitch: {env.simulator.dof_pos[robot_index, [3,7]].cpu().numpy()}")
+    # print(f"actions: {env.simulator.dof_pos[robot_index].cpu().numpy()}")
     pass
 
 def interaction_loop(env, policy, args):
@@ -94,7 +97,7 @@ def interaction_loop(env, policy, args):
     """
     
     logger = Logger(env.dt)
-    robot_index = 1 # which robot is used for logging
+    robot_index = 0 # which robot is used for logging
     joint_index = 2 # which joint is used for logging
     stop_state_log = 300 # number of steps before plotting states
     stop_rew_log = env.max_episode_length + 1 # number of steps before print average episode rewards
@@ -114,9 +117,11 @@ def interaction_loop(env, policy, args):
     if args.use_joystick:
         joystick = Joystick(joystick_type=args.joystick_type)
     
+    frame_dt = 1 / 60.0 # 30Hz
     # interaction loop
     for i in range(10*int(env.max_episode_length)):
         
+        t_start = time.perf_counter()
         # update commands from joystick
         if args.use_joystick:
             joystick.update()
@@ -175,6 +180,12 @@ def interaction_loop(env, policy, args):
                     logger.log_rewards(infos["episode"], num_episodes)
         elif i==stop_rew_log:
             logger.print_rewards()
+        
+        # sleep for the remainder of the frame budget to match real-time playback
+        elapsed = time.perf_counter() - t_start
+        remaining = frame_dt - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
 
 def export_policy(alg_runner, path: str, args, env_cfg, train_cfg):
     """export the policy as jit script according to different task types

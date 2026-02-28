@@ -102,7 +102,12 @@ class GenesisSimulator(Simulator):
         )
         self._robot.zero_all_dofs_velocity(env_ids)
 
-    def reset_root_states(self, env_ids, base_pos, base_quat, base_lin_vel, base_ang_vel):
+    def reset_root_states(self, 
+                          env_ids, 
+                          base_pos, 
+                          base_quat, 
+                          base_lin_vel_w, 
+                          base_ang_vel_w):
         # base pos
         self._base_pos[env_ids, :] = base_pos[:]
         self._robot.set_pos(
@@ -120,12 +125,12 @@ class GenesisSimulator(Simulator):
         self._projected_gravity = quat_rotate_inverse(self._base_quat, self._global_gravity)
 
         # reset root states - velocity
-        self._base_lin_vel[env_ids] = base_lin_vel[:]
-        self._base_ang_vel[env_ids] = base_ang_vel[:]
         base_vel = torch.concat(
-            [self._base_lin_vel[env_ids], self._base_ang_vel[env_ids]], dim=1)
+            [base_lin_vel_w, base_ang_vel_w], dim=1)
         self._robot.set_dofs_velocity(velocity=base_vel, dofs_idx_local=[
                                      0, 1, 2, 3, 4, 5], envs_idx=env_ids)
+        self._base_lin_vel[env_ids] = quat_rotate_inverse(self._base_quat[env_ids], self._robot.get_vel()[env_ids])
+        self._base_ang_vel[env_ids] = quat_rotate_inverse(self._base_quat[env_ids], self._robot.get_ang()[env_ids])
 
     def update_sensors(self):
         # Genesis currently exposes depth update via `update_depth_images`
@@ -151,16 +156,29 @@ class GenesisSimulator(Simulator):
         self._rand_push_vels[:, :2] = push_vel.detach().clone()
         dofs_vel[:, :2] += push_vel
         self._robot.set_dofs_velocity(dofs_vel)
+    
+    def push_links(self):
+        max_force = self._cfg.domain_rand.max_push_force
+        # apply random forces to the links of the robot
+        push_force = torch.rand((self._num_envs, self._robot.n_links, 3), 
+                                device=self._device) * 2 * max_force - max_force
+        all_link_idx = [link.idx - self._robot.link_start for link in self._robot.links]
+        self._scene.sim.rigid_solver.apply_links_external_force(
+            push_force,
+            links_idx=all_link_idx
+        )
 
-    def draw_debug_vis(self):
+    def draw_debug_vis(self,
+                       ref_key_body_pos=None):
         """ Draws visualizations for dubugging (slows down simulation a lot).
             Default behaviour: draws height measurement points
         """
-        # draw height points
-        if not self._cfg.terrain.measure_heights:
-            return
+        # # draw height points
+        # if not self._cfg.terrain.measure_heights:
+        #     return
         self._scene.clear_debug_objects()
-        
+        if self._cfg.env.debug_draw_key_body_points:
+            self._draw_key_body_points(ref_key_body_pos)
         # # Height points around feet
         # height_points = torch.zeros(self._num_envs, 9*len(self._feet_indices), 3, device=self._device)
         # foot_points = self._feet_pos + self._cfg.terrain.border_size
@@ -761,6 +779,14 @@ class GenesisSimulator(Simulator):
             # cv.imshow("Depth Camera", (255 * normalized_depth.cpu().numpy()).astype(np.uint8))
             # cv.waitKey(1)
             self.frame_count += 1
+    
+    def _draw_key_body_points(self, ref_key_body_pos=None):
+        """ Draws key body points for debugging
+        """
+        if ref_key_body_pos is not None:
+            self._scene.draw_debug_spheres(ref_key_body_pos.view(-1, 3), radius=0.03, color=(1, 0, 0, 1))
+        else:
+            pass
             
     def _create_heightfield(self):
         """ Adds a heightfield terrain to the simulation, sets parameters based on the cfg.

@@ -9,12 +9,14 @@ class LeggedRobotCfg(BaseConfig):
         num_actions = 12 # size of the action vector
         send_timeouts = True # send time out information to the algorithm
         episode_length_s = 20 # episode length in seconds
-        env_spacing = 1.0 # spacing between envs in the scene, only for plane
+        env_spacing = 2.0 # spacing between envs in the scene, only for plane
         fail_to_terminal_time_s = 0.1 # time before a fail state leads to environment reset, refer to https://github.com/limxdynamics/tron1-rl-isaacgym/tree/master
         debug = False # enable debug drawings in the simulator
         debug_draw_height_points_around_base = False # obtain height measurements around the base
         debug_draw_height_points_around_feet = False # obtain height measurements around the feet (9 points around each foot, see terrain.measured_points_x/y)
         debug_draw_terrain_height_points = False # draw all height points of the terrain
+        debug_draw_key_body_points = False # draw key body points for mimic tasks
+        max_projected_gravity = -0.1 # max allowed projected gravity in z axis
         
     class terrain:
         
@@ -139,8 +141,6 @@ class LeggedRobotCfg(BaseConfig):
         foot_clearance_target = 0.04 # desired foot clearance above ground [m]
         foot_height_offset = 0.0     # height of the foot coordinate origin above ground [m]
         foot_clearance_tracking_sigma = 0.01
-        # termination conditions
-        max_projected_gravity = -0.1 # max allowed projected gravity in z axis
     
     class commands:
         curriculum = False
@@ -187,6 +187,10 @@ class LeggedRobotCfg(BaseConfig):
         joint_friction_range = [0.0, 0.1]
         randomize_joint_damping = False
         joint_damping_range = [0.0, 1.0]
+        # Apply random push forces to the links of the robot
+        push_links = False
+        max_push_force = 10.0 # [N], maximum magnitude of the random push force applied to each link
+        push_links_interval_s = 15.0 # time interval between random pushes
 
     class normalization:
         class obs_scales:

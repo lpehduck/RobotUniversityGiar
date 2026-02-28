@@ -113,7 +113,12 @@ class IsaacLabSimulator(Simulator):
     def reset_dofs(self, env_ids, dof_pos, dof_vel):
         self._robot.write_joint_state_to_sim(dof_pos, dof_vel, self._dof_indices, env_ids)
         
-    def reset_root_states(self, env_ids, base_pos, base_quat, base_lin_vel, base_ang_vel):
+    def reset_root_states(self, 
+                          env_ids, 
+                          base_pos, 
+                          base_quat, 
+                          base_lin_vel_w, 
+                          base_ang_vel_w):
         # base quat
         quat_sim = base_quat.clone()
         quat_sim[:, 0] = base_quat[:, 3]  # w
@@ -122,8 +127,8 @@ class IsaacLabSimulator(Simulator):
             torch.cat((
                 base_pos,
                 quat_sim,
-                base_lin_vel,
-                base_ang_vel), dim=-1), 
+                base_lin_vel_w,
+                base_ang_vel_w), dim=-1), 
             env_ids)
     
     def update_sensors(self):
@@ -149,8 +154,23 @@ class IsaacLabSimulator(Simulator):
         root_vel = torch.cat([cur_root_vel, self._robot.data.root_link_vel_w[:, 3:6]], dim=-1)
         self._robot.write_root_link_velocity_to_sim(root_vel)
     
-    def draw_debug_vis(self):
-        return super().draw_debug_vis()
+    def push_links(self):
+        max_force = self._cfg.domain_rand.max_push_force
+        # apply random forces to the links of the robot
+        push_force = torch.rand((self._num_envs, self._num_bodies, 3), 
+                                device=self._device) * 2 * max_force - max_force
+        self._robot.instantaneous_wrench_composer.set_forces_and_torques(
+            push_force, 
+            torch.zeros_like(push_force), # zero torque
+            is_global=True
+        )
+    
+    def draw_debug_vis(self,
+                       ref_key_body_pos=None):
+        
+        if self._cfg.env.debug_draw_key_body_points:
+            self._draw_key_body_points(ref_key_body_pos)
+        
     
     def set_viewer_camera(self, eye: np.ndarray, target: np.ndarray):
         self._sim.set_camera_view(eye=eye, 
@@ -273,12 +293,16 @@ class IsaacLabSimulator(Simulator):
                                                      rot=rot_sim,
                                                      joint_pos=self._cfg.init_state.default_joint_angles)
         
+        # specify actuator config based on the robot
         if self._cfg.asset.name == "go2":
             from resources.robots.go2.go2_lab_cfg import GO2_ACTUATOR_CFG
             actuator_cfg = GO2_ACTUATOR_CFG
         elif self._cfg.asset.name == "g1":
-            from resources.robots.g1_description.g1_lab_cfg import G1_ACTUATOR_CFG
-            actuator_cfg = G1_ACTUATOR_CFG
+            from resources.robots.g1_description.g1_lab_cfg import G1_12DOF_ACTUATOR_CFG, G1_29DOF_ACTUATOR_CFG
+            if len(self._cfg.asset.dof_names) == 12:
+                actuator_cfg = G1_12DOF_ACTUATOR_CFG
+            elif len(self._cfg.asset.dof_names) == 29:
+                actuator_cfg = G1_29DOF_ACTUATOR_CFG
         else:
             raise NameError(f"Unknown robot name: {self._cfg.asset.name}")
         
@@ -399,12 +423,26 @@ class IsaacLabSimulator(Simulator):
         # get base link index in the robot articulation
         self._base_link_index = self._robot.body_names.index(self._cfg.asset.base_link_name)
         self._key_body_indices = find_link_indices(self._cfg.asset.key_bodies)
+        print(f"key_body_indices: {self._key_body_indices}")
         
         if self._cfg.asset.obtain_link_contact_states:
             self._contact_state_link_indices = find_link_indices(
                 self._cfg.asset.contact_state_link_names
             )
         
+        from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+        import isaaclab.sim as sim_utils
+        self._key_point_visualizer = VisualizationMarkers(
+            VisualizationMarkersCfg(
+                prim_path="/Visuals/Markers",
+                markers={
+                "sphere": sim_utils.SphereCfg(
+                    radius=0.03,
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
+                )
+                }
+            )
+            )
         self._init_domain_params()
         # randomize friction
         if self._cfg.domain_rand.randomize_friction:
@@ -613,13 +651,6 @@ class IsaacLabSimulator(Simulator):
             base_pos[:, 0] <= self._terrain_x_range[0])
         y_out_of_bound = (base_pos[:, 1] >= self._terrain_y_range[1]) | (
             base_pos[:, 1] <= self._terrain_y_range[0])
-        # check if the base height is lower than the minimum height of the terrain
-        # TODO: this is a temporary solution to prevent the robot from falling through the terrain
-        # TODO: we still need to create terrain directly from mesh to reduce vertices and faces, therefore avoiding missing interaction
-        # if self._cfg.terrain.mesh_type in ['heightfield', 'trimesh']:
-        #     min_height = torch.min(self._height_samples) * self._cfg.terrain.vertical_scale
-        #     z_out_of_bound = base_pos[:, 2] <= min_height
-        #     y_out_of_bound = y_out_of_bound | z_out_of_bound
         out_of_bound_buf = x_out_of_bound | y_out_of_bound
         env_ids = out_of_bound_buf.nonzero(as_tuple=False).flatten()
         if len(env_ids) == 0:
@@ -869,6 +900,12 @@ class IsaacLabSimulator(Simulator):
 
         dome_light_cfg = sim_utils.DomeLightCfg(intensity=800.0, color=(0.7, 0.7, 0.7))
         self._dome_light = dome_light_cfg.func(LIGHT_PATH + "/dome_light", dome_light_cfg)
+    
+    def _draw_key_body_points(self, ref_key_body_pos=None):
+        if ref_key_body_pos is None:
+            pass
+        else:
+            self._key_point_visualizer.visualize(ref_key_body_pos.view(-1, 3))
     
     #----- Properties -----#
     @property

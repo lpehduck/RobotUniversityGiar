@@ -11,7 +11,8 @@ class LeggedRobotNavCfg(BaseConfig):
         debug = False # if debugging, visualize contacts, etc.
         env_spacing = 1.0
         fail_to_terminal_time_s = 0.1 # time before a fail state leads to environment reset, refer to https://github.com/limxdynamics/tron1-rl-isaacgym/tree/master
-
+        max_projected_gravity = -0.1
+        
     class terrain:
         mesh_type = 'plane'    # "heightfield" # none, plane, heightfield
         plane_length = 200.0   # [m]. plane size is 200x200x10 by default
@@ -161,8 +162,6 @@ class LeggedRobotNavCfg(BaseConfig):
         foot_clearance_target = 0.04 # desired foot clearance above ground [m]
         foot_height_offset = 0.0     # height of the foot coordinate origin above ground [m]
         foot_clearance_tracking_sigma = 0.01
-        # termination conditions
-        max_projected_gravity = -0.1
 
     class normalization:
         class obs_scales:

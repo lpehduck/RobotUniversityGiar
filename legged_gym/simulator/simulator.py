@@ -51,15 +51,20 @@ class Simulator(ABC):
         return
     
     @abstractmethod
-    def reset_root_states(self, env_ids: Tensor, base_pos: Tensor, base_quat: Tensor, base_lin_vel: Tensor, base_ang_vel: Tensor):
+    def reset_root_states(self, 
+                          env_ids: Tensor, 
+                          base_pos: Tensor, 
+                          base_quat: Tensor, 
+                          base_lin_vel_w: Tensor, 
+                          base_ang_vel_w: Tensor):
         """Reset the root states of the environments with the given environment IDs.
         
         Args:
             env_ids (Tensor): Environment IDs to reset.
             base_pos (Tensor): Base positions to reset.
             base_quat (Tensor): Base orientations (quaternions, xyzw sequence) to reset.
-            base_lin_vel (Tensor): Base linear velocities to reset.
-            base_ang_vel (Tensor): Base angular velocities to reset.
+            base_lin_vel_w (Tensor): Base linear velocities in world frame to reset.
+            base_ang_vel_w (Tensor): Base angular velocities in world frame to reset.
         """
         return
     
@@ -83,6 +88,12 @@ class Simulator(ABC):
     @abstractmethod
     def push_robots(self):
         """Apply perturbation velocity to the base of the robot as domain randomization.
+        """
+        return
+    
+    @abstractmethod
+    def push_links(self):
+        """Apply perturbation forces to the links of the robot as domain randomization.
         """
         return
     

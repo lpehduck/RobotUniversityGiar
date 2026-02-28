@@ -47,7 +47,9 @@ def main(args):
     #     "local_body_pos": local_body_pos,  # (N, num_links, 3) or None
     #     "link_body_list": body_names,      # list of link names or None
     # }
-    with open(env_cfg.env.motion_file, "rb") as f:
+    motion_file_dir = LEGGED_GYM_ROOT_DIR + "/resources/reference_motion/"
+    motion_file_path = motion_file_dir + env_cfg.env.motion_file
+    with open(motion_file_path, "rb") as f:
         motion_data = pickle.load(f)
     aligned_fps = motion_data["fps"]
     root_pos = motion_data["root_pos"]
@@ -113,7 +115,7 @@ def main(args):
         # record the caculated key body pos
         cur_key_body_pos_relative_to_base = cur_key_body_pos[0] - cur_base_pos[0].unsqueeze(0)
         key_body_pos_relative_to_base_list.append(cur_key_body_pos_relative_to_base)
-        
+        env.simulator.draw_debug_vis(cur_key_body_pos)
         
         # sleep for the remainder of the frame budget to match real-time playback
         elapsed = time.perf_counter() - t_start
@@ -137,7 +139,7 @@ def main(args):
         "key_body_pos_relative_to_base": key_body_pos_relative_to_base.cpu().numpy(),
     }
     
-    output_file = env_cfg.env.motion_file
+    output_file = motion_file_path.replace(".pkl", f"_{SIMULATOR}.pkl")
     with open(output_file, "wb") as f:
         pickle.dump(motion_data, f)
     print(f"Saved updated motion data to {output_file}")

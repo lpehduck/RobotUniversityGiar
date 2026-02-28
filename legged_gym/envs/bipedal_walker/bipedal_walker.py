@@ -16,7 +16,7 @@ class BipedalWalker(LeggedRobot):
         fail_buf = torch.any(
             torch.norm(self.simulator.link_contact_forces[:, self.simulator.termination_contact_indices, :], dim=-1)
             > 10.0, dim=1)
-        fail_buf |= self.simulator.projected_gravity[:, 2] > self.cfg.rewards.max_projected_gravity
+        fail_buf |= self.simulator.projected_gravity[:, 2] > self.cfg.env.max_projected_gravity
         # hip saggital and transversal angle limits
         hip_saggital_indices = [1, 6] # 髋部侧摆自由度
         hip_transversal_indices = [2, 7] # 髋部内外旋自由度

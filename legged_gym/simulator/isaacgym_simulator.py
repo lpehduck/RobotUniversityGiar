@@ -43,25 +43,26 @@ class IsaacGymSimulator(Simulator):
         self._render()
         self._last_base_lin_vel[:] = self._base_lin_vel[:]
         self._last_base_ang_vel[:] = self._base_ang_vel[:]
-        self._last_feet_vel[:] = self.feet_vel[:]
-        self._last_dof_vel[:] = self.dof_vel[:]
+        self._last_feet_vel[:] = self._rigid_body_states[:, self._feet_indices, 7:10]
+        self._last_dof_vel[:] = self._dof_vel[:]
         for _ in range(self._cfg.control.decimation):
+            self._last_dof_pos[:] = self._dof_pos[:]
             self._torques = self._compute_torques(actions).view(self._torques.shape)
-            self._gym.set_dof_actuation_force_tensor(self._sim, gymtorch.unwrap_tensor(self._torques))
+            self._gym.set_dof_actuation_force_tensor(self._sim, 
+                                                gymtorch.unwrap_tensor(self._torques[:, self._dof_indices]))
             self._gym.simulate(self._sim)
-            self._gym.fetch_results(self._sim, True)
+            if (self._device == "cpu"):
+                self._gym.fetch_results(self._sim, True)
             self._gym.refresh_dof_state_tensor(self._sim)
-    
+            self._dof_vel_sim = (self._dof_pos - self._last_dof_pos) / self._sim_params.dt
+            
     def post_physics_step(self):
         self._gym.refresh_actor_root_state_tensor(self._sim)
-        self._base_pos[:] = self._root_states[:, 0:3]
         self._check_base_pos_out_of_bound()
         self._gym.refresh_actor_root_state_tensor(self._sim)
         self._gym.refresh_net_contact_force_tensor(self._sim)
         self._gym.refresh_rigid_body_state_tensor(self._sim)
         # the wrapped tensor will be updated automatically once you call refresh_xxx_tensor
-        self._base_pos[:] = self._root_states[:, 0:3]
-        self._base_quat[:] = self._root_states[:, 3:7]
         self._base_euler[:] = get_euler_xyz(self._base_quat)
         self._base_lin_vel[:] = quat_rotate_inverse(
             self._base_quat, self._root_states[:, 7:10])
@@ -69,9 +70,6 @@ class IsaacGymSimulator(Simulator):
             self._base_quat, self._root_states[:, 10:13])
         self._projected_gravity[:] = quat_rotate_inverse(
             self._base_quat, self._global_gravity)
-        self._feet_vel = self._rigid_body_states[:, self._feet_indices, 7:10]
-        self._feet_pos = self._rigid_body_states[:, self._feet_indices, 0:3]
-        self._key_body_pos = self._rigid_body_states[:, self._key_body_indices, 0:3]
         # Link contact state
         if self._cfg.asset.obtain_link_contact_states:
             self._link_contact_states = 1. * (torch.norm(
@@ -98,14 +96,7 @@ class IsaacGymSimulator(Simulator):
         self._last_feet_vel[env_ids] = 0.
         self._last_base_lin_vel[env_ids] = 0.
         self._last_base_ang_vel[env_ids] = 0.
-        
-        # update gravity projection
-        self._base_quat[env_ids] = self._root_states[env_ids, 3:7]
-        self._projected_gravity[env_ids] = quat_rotate_inverse(
-            self._base_quat[env_ids], self._global_gravity[env_ids])
-        self._base_lin_vel = quat_rotate_inverse(self._base_quat, self._root_states[:, 7:10])
-        self._base_ang_vel = quat_rotate_inverse(self._base_quat, self._root_states[:, 10:13])
-        
+            
     def reset_dofs(self, env_ids, dof_pos, dof_vel):
         self._dof_pos[env_ids] = dof_pos[:, self._dof_indices]
         self._dof_vel[env_ids] = dof_vel[:, self._dof_indices]
@@ -115,21 +106,35 @@ class IsaacGymSimulator(Simulator):
                                                gymtorch.unwrap_tensor(self._dof_state),
                                                gymtorch.unwrap_tensor(env_ids_int32), 
                                                len(env_ids_int32))
-    
-    def reset_root_states(self, env_ids, base_pos, base_quat, base_lin_vel, base_ang_vel):
+        
+    def reset_root_states(self, 
+                          env_ids, 
+                          base_pos, 
+                          base_quat, 
+                          base_lin_vel_w, 
+                          base_ang_vel_w):
         # base position
         self._root_states[env_ids, 0:3] = base_pos[:]
         # base orientation
         self._root_states[env_ids, 3:7] = base_quat[:]
-        # base velocities
-        self._root_states[env_ids, 7:10] = base_lin_vel[:]
-        self._root_states[env_ids, 10:13] = base_ang_vel[:]
+        # base velocities in world frame
+        self._root_states[env_ids, 7:10] = base_lin_vel_w[:]
+        self._root_states[env_ids, 10:13] = base_ang_vel_w[:]
         env_ids_int32 = env_ids.to(dtype=torch.int32)
         self._gym.set_actor_root_state_tensor_indexed(self._sim,
                                                       gymtorch.unwrap_tensor(self._root_states),
                                                       gymtorch.unwrap_tensor(env_ids_int32), 
                                                       len(env_ids_int32))
-    
+        # update data buffers
+        self._base_euler[env_ids] = get_euler_xyz(self._base_quat[env_ids])
+        self._projected_gravity[env_ids] = quat_rotate_inverse(
+            self._base_quat[env_ids], self._global_gravity[env_ids])
+        self._base_lin_vel[env_ids] = quat_rotate_inverse(
+            self._base_quat[env_ids], self._root_states[env_ids, 7:10])
+        self._base_ang_vel[env_ids] = quat_rotate_inverse(
+            self._base_quat[env_ids], self._root_states[env_ids, 10:13])
+        self._gym.refresh_rigid_body_state_tensor(self._sim)
+        
     def update_sensors(self):
         return super().update_sensors()
     
@@ -149,7 +154,18 @@ class IsaacGymSimulator(Simulator):
         self._root_states[:, 7:9] = self._rand_push_vels[:, :2] # set random base velocity in xy plane
         self._gym.set_actor_root_state_tensor(self._sim, gymtorch.unwrap_tensor(self._root_states))
     
-    def draw_debug_vis(self):
+    def push_links(self):
+        max_force = self._cfg.domain_rand.max_push_force
+        push_force = torch.rand((self._num_envs, self._num_bodies, 3), 
+                                device=self._device) * 2 * max_force - max_force
+        self._gym.apply_rigid_body_force_tensors(
+            self._sim,
+            gymtorch.unwrap_tensor(push_force),
+            None,
+            gymapi.CoordinateSpace.GLOBAL_SPACE
+        )
+    
+    def draw_debug_vis(self, ref_key_body_pos=None):
         """ Draws visualizations for dubugging (slows down simulation a lot).
             Default behaviour: draws height measurement points
         """
@@ -164,6 +180,8 @@ class IsaacGymSimulator(Simulator):
             self._draw_height_points_around_feet()
         if self._cfg.env.debug_draw_terrain_height_points:
             self._draw_terrain_height_points()
+        if self._cfg.env.debug_draw_key_body_points:
+            self._draw_key_body_points(ref_key_body_pos)
     
     def set_viewer_camera(self, eye: np.ndarray, target: np.ndarray):
         cam_pos = gymapi.Vec3(eye[0], eye[1], eye[2])
@@ -266,7 +284,7 @@ class IsaacGymSimulator(Simulator):
         print(f"body_names: {self._body_names}")
         self._dof_names = self._gym.get_asset_dof_names(robot_asset)
         print(f"dof_names: {self._dof_names}")
-        self._dof_indices = [self._dof_names.index(name) for name in self._dof_names]
+        self._dof_indices = [self._dof_names.index(name) for name in self._cfg.asset.dof_names]
         print(f"dof_indices: {self._dof_indices}")
         self._num_bodies = len(self._body_names)
         self._num_dof = len(self._dof_names)
@@ -379,12 +397,11 @@ class IsaacGymSimulator(Simulator):
         self._dof_vel = self._dof_state.view(self._num_envs, self._num_dof, 2)[..., 1]
         self._base_pos = self._root_states[:, 0:3]
         self._base_quat = self._root_states[:, 3:7]
+        self._last_dof_pos = torch.zeros_like(self._dof_pos)
+        self._dof_vel_sim = torch.zeros_like(self._dof_vel) # the dof velocity calculated from finite difference of positions
         self._base_euler = get_euler_xyz(self._base_quat)
         self._link_contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self._num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
-        self._feet_vel = self._rigid_body_states[:, self._feet_indices, 7:10]
-        self._feet_pos = self._rigid_body_states[:, self._feet_indices, 0:3]
-        self._key_body_pos = self._rigid_body_states[:, self._key_body_indices, 0:3]
-        self._last_feet_vel = torch.zeros_like(self._feet_vel)
+        self._last_feet_vel = torch.zeros_like(self._rigid_body_states[:, self._feet_indices, 7:10])
 
         # initialize some data used later on
         self._global_gravity = torch.tensor([0.0, 0.0, -1.0], device=self._device, dtype=torch.float).repeat(self._num_envs, 1)
@@ -413,7 +430,7 @@ class IsaacGymSimulator(Simulator):
         # joint positions offsets and PD gains
         self._default_dof_pos = torch.zeros(self._num_dof, dtype=torch.float, device=self._device, requires_grad=False)
         for i in range(self._num_dof):
-            name = self._dof_names[i]
+            name = self._cfg.asset.dof_names[i]
             self._default_dof_pos[i] = self._cfg.init_state.default_joint_angles[name]
             found = False
             for dof_name in self._cfg.control.stiffness.keys():
@@ -523,7 +540,8 @@ class IsaacGymSimulator(Simulator):
     
     def _calc_terrain_info_around_feet(self):
         # Foot position
-        foot_points = self._feet_pos + self._cfg.terrain.border_size
+        feet_pos = self._rigid_body_states[:, self._feet_indices, 0:3]
+        foot_points = feet_pos + self._cfg.terrain.border_size
         foot_points = (foot_points/self._cfg.terrain.horizontal_scale).long()
         # px and py for 4 feet, num_envs*len(feet_indices)
         px = foot_points[:, :, 0].view(-1)
@@ -568,9 +586,8 @@ class IsaacGymSimulator(Simulator):
             return
         else:
             # reset base position to initial position
-            self._base_pos[env_ids] = self._base_init_pos
-            self._base_pos[env_ids] += self._env_origins[env_ids]
-            self._root_states[env_ids, 0:3] = self._base_pos[env_ids]
+            self._root_states[env_ids, 0:3] = self._base_init_pos
+            self._root_states[env_ids, 0:3] += self._env_origins[env_ids]
             env_ids_int32 = env_ids.to(dtype=torch.int32)
             self._gym.set_actor_root_state_tensor_indexed(self._sim,
                                                      gymtorch.unwrap_tensor(self._root_states),
@@ -594,7 +611,7 @@ class IsaacGymSimulator(Simulator):
         if control_type=="P":
             torques = self._kp_scale * self._p_gains * (actions_scaled + \
                 self._default_dof_pos[:, self._dof_indices] - self._dof_pos[:, self._dof_indices]) - \
-                    self._kd_scale * self._d_gains*self._dof_vel[:, self._dof_indices]
+                    self._kd_scale * self._d_gains * self._dof_vel[:, self._dof_indices]
         elif control_type=="V":
             torques = self._kp_scale * self._p_gains * (actions_scaled - \
                 self._dof_vel[:, self._dof_indices]) - self._kd_scale * self._d_gains * \
@@ -765,6 +782,21 @@ class IsaacGymSimulator(Simulator):
                 sphere_pose = gymapi.Transform(gymapi.Vec3(x, y, z), r=None)
                 gymutil.draw_lines(sphere_geom, self._gym, self._viewer, self._envs[0], sphere_pose)
     
+    def _draw_key_body_points(self, ref_key_body_pos=None):
+        """ Draws key body points for debugging
+        """
+        if ref_key_body_pos is not None:
+            sphere_geom = gymutil.WireframeSphereGeometry(0.03, 8, 8, None, color=(0, 1, 0))
+            for i in range(self._num_envs):
+                for j in range(self._key_body_indices.shape[0]):
+                    x = ref_key_body_pos[i, j, 0].cpu().numpy()
+                    y = ref_key_body_pos[i, j, 1].cpu().numpy()
+                    z = ref_key_body_pos[i, j, 2].cpu().numpy()
+                    sphere_pose = gymapi.Transform(gymapi.Vec3(x, y, z), r=None)
+                    gymutil.draw_lines(sphere_geom, self._gym, self._viewer, self._envs[i], sphere_pose)
+        else:
+            pass
+        
     def _draw_height_points_around_base(self):
         # draw height lines
         if not self._cfg.terrain.measure_heights:
@@ -786,7 +818,8 @@ class IsaacGymSimulator(Simulator):
         """
         # Height points around feet
         height_points = torch.zeros(self._num_envs, 9*len(self._feet_indices), 3, device=self._device)
-        foot_points = self._feet_pos + self._cfg.terrain.border_size
+        feet_pos = self._rigid_body_states[:, self._feet_indices, 0:3]
+        foot_points = feet_pos + self._cfg.terrain.border_size
         foot_points = (foot_points/self._cfg.terrain.horizontal_scale).long()
         px = foot_points[:, :, 0].view(-1)
         py = foot_points[:, :, 1].view(-1)
@@ -996,7 +1029,11 @@ class IsaacGymSimulator(Simulator):
             for j in range(self._num_dof):
                 props["armature"][j] = torch.tensor(
                     armature, dtype=torch.float, device=self._device)
-
+        else: # default to a small armature to improve stability
+            for j in range(self._num_dof):
+                props["armature"][j] = torch.tensor(
+                    0.01, dtype=torch.float, device=self._device)
+        
         return props
 
     def _process_rigid_body_props(self, props, env_id):
@@ -1011,7 +1048,7 @@ class IsaacGymSimulator(Simulator):
             rng = self._cfg.domain_rand.added_mass_range
             added_base_mass = np.random.uniform(rng[0], rng[1])
             props[0].mass += added_base_mass
-        self._added_base_mass[env_id] = added_base_mass
+            self._added_base_mass[env_id] = added_base_mass
 
         # randomize com position
         if self._cfg.domain_rand.randomize_com_displacement:
@@ -1092,6 +1129,18 @@ class IsaacGymSimulator(Simulator):
         return self._feet_indices
     
     @property
+    def feet_pos(self):
+        return self._rigid_body_states[:, self._feet_indices, :3]
+
+    @property
+    def feet_vel(self):
+        return self._rigid_body_states[:, self._feet_indices, 7:10]
+    
+    @property
+    def key_body_pos(self):
+        return self._rigid_body_states[:, self._key_body_indices, :3]
+    
+    @property
     def dof_pos_limits(self):
         return self._dof_pos_limits[self._dof_indices]
     
@@ -1105,7 +1154,8 @@ class IsaacGymSimulator(Simulator):
     
     @property
     def dof_vel(self):
-        return self._dof_vel[:, self._dof_indices]
+        # return self._dof_vel[:, self._dof_indices]
+        return self._dof_vel_sim[:, self._dof_indices]
     
     @property
     def last_dof_vel(self):

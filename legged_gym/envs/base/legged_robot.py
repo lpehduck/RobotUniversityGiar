@@ -82,10 +82,11 @@ class LeggedRobot(BaseTask):
             torch.norm(self.simulator.link_contact_forces[:, self.simulator.termination_contact_indices, :], dim=-1)
             > 10.0, dim=1)
         # print(f"contact termination: {fail_buf}")
-        fail_buf |= self.simulator.projected_gravity[:, 2] > self.cfg.rewards.max_projected_gravity
-        # print(f"gravity termination: {self.simulator.projected_gravity[:, 2] > self.cfg.rewards.max_projected_gravity}")
+        fail_buf |= self.simulator.projected_gravity[:, 2] > self.cfg.env.max_projected_gravity
+        # print(f"gravity termination: {self.simulator.projected_gravity[:, 2] > self.cfg.env.max_projected_gravity}")
         self.fail_buf += fail_buf
         self.time_out_buf = self.episode_length_buf > self.max_episode_length  # no terminal reward for time-outs
+        # print(f"time out: {self.time_out_buf}")
         self.reset_buf = (
             (self.fail_buf > self.cfg.env.fail_to_terminal_time_s / self.dt)
             | self.time_out_buf
@@ -316,6 +317,10 @@ class LeggedRobot(BaseTask):
 
         if self.cfg.domain_rand.push_robots and (self.common_step_counter % self.cfg.domain_rand.push_interval == 0):
             self.simulator.push_robots()
+            # print(f"pushing robots")
+        if self.cfg.domain_rand.push_links and (self.common_step_counter % self.cfg.domain_rand.push_links_interval == 0):
+            self.simulator.push_links()
+            # print(f"pushing links")
         
     def _resample_commands(self, env_ids):
         """ Randommly select commands of some environments
@@ -456,7 +461,8 @@ class LeggedRobot(BaseTask):
                                 self.cfg.domain_rand.kd_range[1]) / 2  # mean value
         
         self.cfg.domain_rand.push_interval = np.ceil(self.cfg.domain_rand.push_interval_s / self.dt)
-
+        self.cfg.domain_rand.push_links_interval = np.ceil(self.cfg.domain_rand.push_links_interval_s / self.dt)
+        
     # ------------ reward functions----------------
     def _reward_lin_vel_z(self):
         # Penalize z axis base linear velocity

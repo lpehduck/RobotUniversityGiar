@@ -198,43 +198,43 @@ class G1MimicCommonCfg(LeggedRobotCfg):
             'waist_yaw_joint': 0.,
             'waist_roll_joint': 0,
             'waist_pitch_joint': 0,
-            'left_shoulder_pitch_joint': 0.0,
-            'left_shoulder_roll_joint': 0.2,
+            'left_shoulder_pitch_joint': 0.3,
+            'left_shoulder_roll_joint': 0.25,
             'left_shoulder_yaw_joint': 0.0,
-            'left_elbow_joint': 1.1,
-            'left_wrist_roll_joint': 0.0,
+            'left_elbow_joint': 0.97,
+            'left_wrist_roll_joint': 0.15,
             'left_wrist_pitch_joint': 0.0,
             'left_wrist_yaw_joint': 0.0,
-            'right_shoulder_pitch_joint': 0.0,
-            'right_shoulder_roll_joint': -0.2,
+            'right_shoulder_pitch_joint': 0.3,
+            'right_shoulder_roll_joint': -0.25,
             'right_shoulder_yaw_joint': 0.0,
-            'right_elbow_joint': 1.1,
-            'right_wrist_roll_joint': 0.0,
+            'right_elbow_joint': 0.97,
+            'right_wrist_roll_joint': -0.15,
             'right_wrist_pitch_joint': 0.0,
             'right_wrist_yaw_joint': 0.0,
         }
 
     class control(LeggedRobotCfg.control):
         control_type = 'P'
-        stiffness = {'hip_yaw': 150., 
-                     'hip_roll': 150., 
-                     'hip_pitch': 200., 
-                     'knee': 200., 
-                     'ankle': 20.,
-                     'waist': 200.,
+        stiffness = {'hip': 100., 
+                     'knee': 150., 
+                     'ankle': 40.,
+                     'waist_yaw': 200.,
+                     'waist_roll': 40.,
+                     'waist_pitch': 40.,
                      'shoulder': 40.,
                      'elbow': 40.,
                      'wrist': 40.,
                      }
-        damping = {'hip_yaw': 5.0, 
-                   'hip_roll': 5.0, 
-                   'hip_pitch': 5.0, 
-                   'knee': 5.0, 
-                   'ankle': 2,
-                   'waist': 5.0,
-                   'shoulder': 10.0,
-                   'elbow': 10.0,
-                   'wrist': 10.0,
+        damping = {'hip': 2.0,  
+                   'knee': 4.0, 
+                   'ankle': 2.0,
+                   'waist_yaw': 5.0,
+                   'waist_roll': 5.0,
+                   'waist_pitch': 5.0,
+                   'shoulder': 1.0,
+                   'elbow': 1.0,
+                   'wrist': 1.0,
                    }
         action_scale = 0.25
         decimation = 4
@@ -243,7 +243,9 @@ class G1MimicCommonCfg(LeggedRobotCfg):
         name = "g1"
         file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/g1_description/g1_29dof.urdf'
         foot_name = "ankle_roll"
-        key_bodies = ["ankle_roll", "head", "wrist_yaw"]
+        key_bodies = ["ankle_roll", "knee", "hip", 
+                      "torso", "wrist_yaw", "shoulder_roll",
+                      "shoulder_pitch", "elbow"]
         penalize_contacts_on = ["torso", "hip", "knee", "hand", 
                                 "shoulder", "elbow", "wrist"]
         terminate_after_contacts_on = ["pelvis"]

@@ -13,6 +13,7 @@ class TRON1SFCfg( LeggedRobotCfg ):
         num_privileged_obs = int( num_single_privileged_obs * c_frame_stack )
         num_actions = 8
         env_spacing = 2.0
+        max_projected_gravity = -0.4
     
     class terrain( LeggedRobotCfg.terrain ):
         mesh_type = "plane" # none, plane, heightfield
@@ -99,7 +100,6 @@ class TRON1SFCfg( LeggedRobotCfg ):
         foot_clearance_tracking_sigma = 0.01
         foot_distance_threshold = 0.115
         about_landing_threshold = 0.05
-        max_projected_gravity = -0.4
         only_positive_rewards = False
         class scales( LeggedRobotCfg.rewards.scales ):
             # limitation

@@ -14,6 +14,7 @@ class TRON1PF_EECfg( LeggedRobotEECfg ):
         # privileged_obs here is actually critic_obs
         num_actions = 6
         env_spacing = 3.0
+        max_projected_gravity = -0.2
     
     class terrain( LeggedRobotEECfg.terrain ):
         if SIMULATOR == "genesis":
@@ -100,7 +101,6 @@ class TRON1PF_EECfg( LeggedRobotEECfg ):
         base_height_tracking_sigma = 0.01
         foot_distance_threshold = 0.115
         only_positive_rewards = False
-        max_projected_gravity = -0.2
         class scales( LeggedRobotEECfg.rewards.scales ):
             # limitation
             keep_balance = 1.0

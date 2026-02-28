@@ -95,7 +95,7 @@ class LeggedRobotNav(BaseTask):
         fail_buf = torch.any(
             torch.norm(self.simulator.link_contact_forces[:, self.simulator.termination_contact_indices, :], dim=-1)
             > 10.0, dim=1)
-        fail_buf |= self.simulator.projected_gravity[:, 2] > self.cfg.rewards.max_projected_gravity
+        fail_buf |= self.simulator.projected_gravity[:, 2] > self.cfg.env.max_projected_gravity
         self.fail_buf += fail_buf
         self.time_out_buf = self.episode_length_buf > self.max_episode_length  # no terminal reward for time-outs
         self.reset_buf = (
