@@ -8,6 +8,9 @@ class K1AMP(LeggedRobotAMP):
     
     def compute_observations(self):
         
+        key_body_pos_relative_to_base = self.simulator.key_body_pos - \
+                self.simulator.base_pos.unsqueeze(1)
+        
         obs_buf = torch.cat((
             self.commands[:, :3] * self.commands_scale,
             self.simulator.projected_gravity,
@@ -24,13 +27,15 @@ class K1AMP(LeggedRobotAMP):
             self.simulator.dr_base_com_bias,          # 3
             self.simulator.dr_kp_scale,               # num_dofs
             self.simulator.dr_kd_scale,               # num_dofs
-            self.simulator.dr_ctrl_delay,             # 1
         ), dim=-1)
         
         single_critic_obs = torch.cat((
             self.simulator.base_lin_vel * self.obs_scales.lin_vel, # 3
             obs_buf,                                               # num_obs
-            domain_randomization_info,                             # 51
+            domain_randomization_info,                             # 52
+            self.feet_air_time,                                    # 2
+            self.simulator.feet_pos[:, :, 2],                      # 2
+            key_body_pos_relative_to_base.flatten(start_dim=1),    # num_key_bodies * 3
         ), dim=-1)
         
         self.critic_obs_deque.append(single_critic_obs)

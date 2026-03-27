@@ -158,6 +158,10 @@ class PPO_CTS(PPO):
             nn.utils.clip_grad_norm_(
                 self.rl_params, self.max_grad_norm)
             self.optimizer.step()
+            
+            mean_value_loss += value_loss.item()
+            mean_teacher_surrogate_loss += teacher_surrogate_loss.item()
+            mean_student_surrogate_loss += student_surrogate_loss.item()
         
         generator = self._get_data_generator()
         for teacher_obs_batch, teacher_privileged_obs_batch, teacher_actions_batch, \
@@ -176,10 +180,6 @@ class PPO_CTS(PPO):
                 self.history_encoder_optimizer.step()
             
                 mean_reconstruction_loss += reconstruction_loss.item()
-                
-            mean_value_loss += value_loss.item()
-            mean_teacher_surrogate_loss += teacher_surrogate_loss.item()
-            mean_student_surrogate_loss += student_surrogate_loss.item()
         
         num_updates = self.num_learning_epochs * self.num_mini_batches
         mean_value_loss /= num_updates

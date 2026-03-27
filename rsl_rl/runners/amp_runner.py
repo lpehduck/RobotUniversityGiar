@@ -97,6 +97,7 @@ class AMPRunner(OnPolicyRunner):
                     if self.log_dir is not None:
                         # Book keeping
                         if 'episode' in infos:
+                            # add amp reward to episode info for terminal logging
                             infos['episode']['rew_amp'] = amp_reward / self.env.dt
                             ep_infos.append(infos['episode'])
                         cur_reward_sum += rewards
