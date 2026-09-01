@@ -1,0 +1,794 @@
+---
+name: rugiar-training
+description: Training/fine-tuning policies with the `rugiar` CLI (BOTH Genesis locomotion tasks like `g1` and mjlab motion-tracking tasks like `Rugiar-G1-Mimic`, auto-dispatched to whichever backend a task needs, same flags either way), fusing/merging already-trained policies' weights with `rugiar fuse`, and behavior-cloning ANY policy (including externally-sourced ones with no train_checkpoint.pt, like `stable`) into a fresh fine-tunable one with `rugiar distill`. Use whenever the user wants to train/fine-tune a policy (locomotion or motion-tracking), fuse/merge policies, distill/clone a policy's behavior, discover tasks/reward scales/local policies/reference-motion clips, or judge whether a checkpoint is actually good. Does NOT cover driving/watching a robot live with `rugiar_driver.py` (see rugiar-movement) or standing up/managing the control web or MCP server (see rugiar-management) — this skill is the CLI/training half only.
+allowed-tools: Bash(rugiar:*) Bash(.venv/bin/rugiar:*) Bash(pip install:*) Bash(python3 -c:*) Bash(mkdir -p ~/.kaggle:*) Bash(chmod 600 ~/.kaggle/kaggle.json) Bash(mv:*) Bash(export SIMULATOR=*)
+---
+
+# RUgiar training — CLI for creating RobotUniversityGiar policies
+
+This skill is one of three optional splits of the original `rugiar` skill
+(the other two: `rugiar-movement` for driving/watching a robot with
+`rugiar_driver.py`, and `rugiar-management` for `rugiar_mcp`/control-web
+server-lifecycle concerns). The original `rugiar` skill still exists and
+covers all three combined — use this narrower one when the task is
+specifically about training, fusing, or distilling a policy, not
+driving/watching one live or managing server infrastructure.
+
+For the system-wide picture beyond this skill's CLI scope — how Training,
+Policy Operations, Control, the Web UI, the CLI, the Robot Driver, and
+Third-Party Integrations fit together — see
+**`legged_gym/control/ARCHITECTURE.md`**, not this file.
+
+`rugiar train` is a thin, argument-complete front end onto
+`legged_gym.control.training.TrainingManager` — the exact engine the control
+web's "Create Policy" panel uses (`legged_gym/cli/rugiar.py`). It launches
+`legged_gym/scripts/web_train.py` as a subprocess, streams its log live, and
+on success writes a self-contained `./policies/<name>/` folder
+(`checkpoint.pt`, `train_checkpoint.pt`, `train.log`, `meta.json`) —
+identical in shape to a policy trained through the browser UI.
+
+Installed as a real command via `[project.scripts]` in `pyproject.toml`; if
+`rugiar` isn't on PATH, use `.venv/bin/rugiar` (or `source .venv/bin/activate`
+first).
+
+**The live, authoritative flag reference is `rugiar train --help` — every
+group (compute budget, fine-tuning, command envelope, stability targets,
+push perturbation, reward shaping, backend, discovery) is documented there
+with defaults. Run it before guessing a flag name.** What follows is the
+part `--help` can't tell you.
+
+## Prerequisite: SIMULATOR must be set
+
+Every `rugiar` command (even `--list_tasks`) imports `legged_gym`, which
+**refuses to import at all** unless `SIMULATOR` is set:
+
+```bash
+export SIMULATOR=genesis    # or isaaclab — see "Choosing a simulator" below
+```
+
+Forgetting this produces `ValueError: Unsupported SIMULATOR type...` before
+any argparse error — if a `rugiar` command fails immediately with that, this
+is why.
+
+## Quick start
+
+```bash
+export SIMULATOR=genesis
+rugiar train --list_tasks                       # what can I train?
+rugiar train --task g1 --list_reward_scales      # what reward terms can I tune?
+rugiar train --list_policies                     # what's already local, fine-tunable?
+
+# train from scratch, stop after 15 minutes
+rugiar train --task g1 --name crouch --max_minutes 15 \
+    --base_height_target 0.45 --push_robots off
+
+# fine-tune an existing local policy
+rugiar train --task g1 --name crouch_v2 --from_policy crouch \
+    --max_iterations 500 --reward_scale action_rate -0.1
+
+# train on Kaggle's free GPU instead of this machine — num_envs=4096 is the
+# community/upstream standard; see "Scale matters" below before treating
+# any short run's output as a trustworthy result
+rugiar train --task g1 --name cloud_walk --backend kaggle --num_envs 4096 --max_iterations 1500
+```
+
+Ctrl-C during a run terminates the training subprocess and leaves the policy
+**unregistered** (nothing gets written to `./policies/`) — safe to interrupt.
+
+## Training an mjlab motion-tracking task (e.g. `Rugiar-G1-Mimic`)
+
+Same `rugiar train --task ... --name ...` command, same flags, same
+`--from_policy`/`--reward_scale`/`--backend` machinery — an mjlab
+motion-tracking task is not a different tool, just a different `--task`.
+`TrainingManager`'s backend registry (see `legged_gym/control/training.py`'s
+module comment on `TrainingBackend`/`BACKENDS`, and
+`docs/mjlab_training_contract.md` for the full design) auto-detects which
+backend a task needs and dispatches to `legged_gym/scripts/mjlab_train.py`
+under `.venv-mjlab` instead of `web_train.py` under `.venv` — you never pick
+this yourself.
+
+```bash
+export SIMULATOR=genesis    # still required — see "Prerequisite" above,
+                             # even though this trains under .venv-mjlab
+rugiar train --list_tasks                                   # both backends: labeled "(genesis)"/"(mjlab)"
+rugiar train --task Rugiar-G1-Mimic --list_reward_scales     # the 9 real motion-tracking reward terms
+rugiar train --list_motions --task Rugiar-G1-Mimic           # which clips exist, which already have a policy
+
+rugiar train --task Rugiar-G1-Mimic --name mimic_dance --max_iterations 3000 \
+    --motion_file resources/reference_motion/unitree_g1/mjlab_run/dance1_subject2.npz
+```
+
+- **`--motion_file` is REQUIRED for a motion-tracking task** — `rugiar train`
+  errors up front (`needs a --motion_file`) rather than launching a doomed
+  subprocess. `--list_motions` is how you find a valid one; a `.npz` under
+  `resources/reference_motion/unitree_g1/mjlab_run/` (not the `.pkl` path
+  Genesis's own `g1_deepmimic` task uses — different format, different dir).
+- **The Genesis-only knobs don't apply and are rejected, not silently
+  ignored**: `--cmd_vx_range`/`--cmd_vy_range`/`--cmd_yaw_range`,
+  `--base_height_target`/`--lin_vel_z_target`/`--ang_vel_xy_target`/
+  `--orientation_tilt_target`, `--push_robots`/`--max_push_vel_xy`/
+  `--push_interval_s`/`--push_dir` — a motion-tracking task has no velocity
+  command, no stability targets, no pushes. Passing any of these errors
+  immediately with a clear message naming which ones don't apply.
+- **`--backend kaggle` is not supported for an mjlab task** — Kaggle's
+  bootstrap is Isaac-Gym-specific (same Pascal-GPU/`mujoco-warp`
+  incompatibility class as Genesis had there); `rugiar` refuses with a clear
+  error rather than attempting it. `--backend local` (the default) is the
+  only supported path today — CPU-only on this machine, measured
+  ~1.27s/PPO-iteration at `num_envs=8`; scale `--num_envs`/iteration budget
+  accordingly (per "Scale matters" below, but note the mjlab throughput
+  numbers are NOT the same as Genesis's — `estimate()`/the control web's ETA
+  reads real recorded history per (backend, simulator), not one shared
+  number).
+- **You never need `.venv-mjlab/bin/rugiar`** — it doesn't exist (`rugiar`
+  is only pip-installed under `.venv`). Every discovery flag
+  (`--list_tasks`/`--list_reward_scales`/`--list_motions`) still returns
+  real mjlab data even run from `.venv`: when this process can't import
+  mjlab itself, `TrainingManager._mjlab_registry_snapshot()` does a one-shot
+  probe into `.venv-mjlab` and caches the result for the rest of this
+  invocation. If `--list_tasks`' mjlab section says "probe failed" instead
+  of listing real task names, `.venv-mjlab` itself is missing/broken on this
+  machine — check `.venv-mjlab/bin/python` exists.
+- **The 9 real reward terms** (current defaults, `Rugiar-G1-Mimic`):
+  `motion_global_root_pos` (0.5), `motion_global_root_ori` (0.5),
+  `motion_body_pos` (1.0), `motion_body_ori` (1.0), `motion_body_lin_vel`
+  (1.0), `motion_body_ang_vel` (1.0), `action_rate_l2` (-0.1), `joint_limit`
+  (-10.0), `self_collisions` (-10.0) — different vocabulary than Genesis
+  tasks' `tracking_lin_vel`-style scales, don't reuse that mental model.
+- A trained mjlab policy's `meta.json` records `"motion_file"` (the exact
+  clip it was trained against, repo-relative) and `"simulator": "mjlab"` —
+  `--list_motions`' `has_policy` flag reads that field directly (exact
+  match), not a name-substring guess, for anything trained through this UI
+  from here on.
+- Same **watch it walk** rule as everything else in this skill — a 9-term
+  reward curve trending the right direction is not evidence the tracked
+  motion looks right; load the resulting `checkpoint.onnx` into
+  `rugiar_driver_mjlab.py`/the control web and actually look at it against
+  the reference-motion ghost overlay before trusting it.
+
+## Fusing policies (`rugiar fuse`)
+
+Merges 2+ already-trained local policies' weights into a new policy — no
+further training. Same engine as the control web's "⚛ Fuse policies…" panel
+(right under "+ New policy…" — `legged_gym/control/fusion.py` +
+`TrainingManager.fuse_policies()`), driven from the CLI:
+
+```bash
+rugiar fuse --list_fusion_methods                          # every method this build knows about
+rugiar fuse --list_policies                                # same list as `train`'s —
+                                                             # fine-tunable == fusable
+
+# uniform 2-way weighted average
+rugiar fuse --policies stable_home_made_3 stable_home_made_4 --name blended
+
+# weighted 3-way merge, favoring the first source 2:1:1
+rugiar fuse --policies base_a base_b base_c --weights 2 1 1 --name blended_v2
+
+# permutation-aligned merge instead of naive averaging (works for LSTM/GRU too)
+rugiar fuse --policies base_a base_b --method git_rebasin --name blended_rebasin
+```
+
+`--list_fusion_methods` output shape (one line per method):
+
+```
+Fusion methods:
+  weighted_average (available): Weighted average — Elementwise weighted sum of matching weights across every source policy...
+  git_rebasin (available): Git Re-Basin (permutation alignment) — Solves for the hidden-unit permutation...
+```
+
+The result is registered as a normal `./policies/<name>/` — fine-tunable via
+`train --from_policy` and fusable again, same as anything trained through
+this UI. Every source needs a `train_checkpoint.pt` (same requirement
+`--from_policy` has — `--list_policies`'s `fine-tunable=yes/no` doubles as
+`fusable=yes/no`), and all sources must be architecturally compatible (same
+obs/action dims, hidden dims, recurrent-or-not) — checked directly from each
+`train_checkpoint.pt`'s tensor shapes, no live sim/task config needed. A
+mismatched **task** across sources is only a warning printed to stderr, not
+a hard stop, since two different tasks can share an identical network shape.
+
+**Method: `weighted_average`** (default) — a.k.a. model soup / SWA-style
+interpolation, an elementwise weighted sum of matching weights. Reasonable
+for closely related checkpoints (a fine-tune lineage, or same-seed
+variants) — no guarantee for independently-trained policies, since their
+hidden units aren't necessarily aligned (permutation symmetry: two networks
+trained from different random inits can converge to functionally-equivalent
+but internally *permuted* representations, and naively averaging permuted
+weights usually lands between the two minima rather than near either).
+
+**Method: `git_rebasin`** (`--method git_rebasin`) — solves for the
+hidden-unit permutation that best aligns every non-reference source to the
+first one *before* averaging (Ainsworth et al., 2022's weight-matching
+algorithm, `fusion.rebasin_align()`), so the merge lands inside rather than
+between the sources' loss basins. Works for both plain and recurrent
+(LSTM/GRU) actor/critic policies — an RNN's own per-gate hidden-unit
+permutation symmetry is aligned too (all gates of a layer share one
+permutation, since it's the same cell state being gated), then chained into
+the downstream MLP's own alignment. Always double-check `fusion.py`'s
+`FUSION_METHODS` registry (or `--list_fusion_methods`) for the current
+`available`/scope state before telling a user what's supported — this is a
+snapshot, not a guarantee it stays this way forever.
+
+## Distilling policies (`rugiar distill`)
+
+Behavior-clones a TEACHER policy — any local policy, crucially including one
+with NO `train_checkpoint.pt` at all (e.g. `stable`, an externally-sourced
+checkpoint with no local training history) — into a fresh, fine-tunable
+policy. Unlike `rugiar fuse` (which merges WEIGHTS and requires matching
+architectures + a `train_checkpoint.pt` on every source), this clones
+BEHAVIOR: rolls the teacher through the target task's own simulator,
+collects (observation, action) pairs, and supervise-trains a brand-new
+network via MSE (`legged_gym/control/distillation.py` +
+`TrainingManager.start_distillation()`). The result is registered as a
+normal `./policies/<name>/` with a real `train_checkpoint.pt` — fine-tunable
+via `train --from_policy` exactly like anything else, which is the whole
+point: this is the only way to make an externally-sourced, un-fine-tunable
+checkpoint like `stable` continuable with this repo's own PPO pipeline. Same
+engine as the control web's "⏳ Distill policy…" panel.
+
+```bash
+rugiar distill --list_distill_methods                      # every method this build knows about
+rugiar distill --list_policies                             # same list as `train`'s — ANY policy
+                                                             # qualifies as a teacher here (unlike fuse)
+
+# clone 'stable' into a fine-tunable policy, full defaults
+rugiar distill --teacher stable --task g1 --name stable_distilled
+
+# then keep training it normally, same as any other checkpoint
+rugiar train --task g1 --name stable_distilled_ft --from_policy stable_distilled --max_iterations 500
+```
+
+**Unlike `train`/`fuse`, this runs LOCAL ONLY — there is no Kaggle backend
+for distillation** (no `--backend` flag exists on `rugiar distill`). It's
+cheap enough (see timing below) that this hasn't mattered in practice, but
+don't tell a user it can run on Kaggle — it can't, yet.
+
+**`--num_envs` defaults to 1, not 64 (learned the hard way — don't second-guess this default).**
+Some externally-sourced teachers (e.g. unitree_rl_gym's own TorchScript
+exports, loaded as `legged_gym/control/policy.py`'s `InternalStatePolicy`)
+bake a FIXED batch size — normally 1 — into the exported module's own
+hidden-state buffers, and crash on anything else:
+
+```
+RuntimeError: Expected hidden[0] size (1, 64, 64), got [1, 1, 64]
+```
+
+`distillation.check_dimensions_compatible()` catches this before wasting a
+whole rollout (fails fast with a clear error), but the fix is just re-running
+with `--num_envs 1`. A LOCALLY-trained teacher (this repo's own
+`ExplicitStatePolicy` export convention) has no such limit and CAN safely use
+a higher `--num_envs` for a faster rollout — but there's no cheap way to tell
+which kind a given teacher is ahead of time without just trying, so 1 stays
+the universal safe default. Don't raise this default without checking the
+teacher's export convention first.
+
+**Timing (measured, CPU/Genesis, this machine, `--num_envs 1`):**
+`--rollout_steps 4000 --bc_epochs 20` (the defaults) took ~62-68s end to end,
+`--rollout_steps 1000 --bc_epochs 10` took ~21s. Distillation is cheap
+relative to real training (this is supervised learning over one rollout, not
+PPO over thousands of iterations) — a full default-budget run is a
+"seconds-to-a-minute-or-two" operation, safe to just run and wait for rather
+than backgrounding.
+
+**Quality scales with `--rollout_steps`/`--bc_epochs` — don't trust a
+low-budget test run to represent real quality.** A quick `--rollout_steps
+1000 --bc_epochs 10` smoke test (to verify the pipeline runs at all) landed
+`final_bc_loss` at 0.234 and visibly did NOT walk like its teacher. The same
+teacher re-run at the full defaults (4000/20) dropped to `final_bc_loss`
+0.0425 and matched much better. `final_bc_loss` is reported in the job's
+result and in the finalized policy's `meta.json` (`distillation.final_bc_loss`)
+— read it, don't just check the job finished; a "done" status with a high
+loss is a bad clone that technically succeeded.
+
+**A `final_bc_loss` that's low for one teacher isn't automatically low for
+another, even at identical hyperparameters — this can mean the teacher's obs
+convention doesn't perfectly line up with this task's, even though the
+dimension check passed.** At the SAME 4000/20/num_envs=1 settings,
+`g1_crouch_stability` (a checkpoint this repo itself produced) converged to
+`final_bc_loss` 0.0042; `stable` (externally-sourced, unitree_rl_gym) only
+reached 0.0425 — roughly 10x worse. `check_dimensions_compatible()` only
+verifies obs/action tensor SHAPE, not the actual meaning/ordering/scale of
+each channel — a shape match doesn't guarantee a semantic match. If a
+distilled clone's loss is stubbornly high no matter how much you raise
+`--rollout_steps`/`--bc_epochs`, suspect an obs-convention mismatch with the
+teacher, not just "needs more training" — always **watch it walk** before
+trusting a distilled clone, doubly so for an externally-sourced teacher.
+
+**Method: `behavior_cloning`** (default, only one currently implemented) —
+one-shot: the student never acts during data collection, so it never gets
+corrected on states it would visit on its own that diverge from the
+teacher's trajectory (the classic BC covariate-shift problem). `dagger` is
+listed in `--list_distill_methods` as planned/not yet implemented for this
+exact reason — check `distillation.DISTILL_METHODS`'s `available` field (or
+`--list_distill_methods`) before telling a user it's usable.
+
+## How to know if a checkpoint actually walks (don't trust the numbers)
+
+**The single most important rule in this skill: `Mean reward` and `Mean
+episode length` are not evidence a policy walks, no matter how good they
+look.** This has been proven wrong here more than once, in both directions:
+
+- A checkpoint can post a strong reward/episode_length and still take zero
+  steps under a full forward command, or fall repeatedly in a way the
+  per-iteration average doesn't make obvious (a spiking reward from short
+  high-value bursts before each fall can look identical to steady progress).
+- Two checkpoints can score in the same range — one confirmed to walk, the
+  other confirmed not to — with no way to tell which is which from the
+  numbers alone. In one confirmed case here, the checkpoint that actually
+  walked had a *lower* reward and episode_length than an earlier checkpoint
+  from the same lineage that took no steps at all.
+- A reward curve plateauing partway through a training chunk is not
+  evidence that the underlying gait had already reached its final quality
+  at that point — the metric and the real behavior can move independently.
+
+**The only reliable check is watching it directly** under a commanded
+velocity — see the `rugiar-movement` skill's `play.py`/`rugiar_driver.py`
+sections. Budget for this before trusting any checkpoint, especially before
+deleting the `logs/<task>/<run>/` directory it came from.
+
+**A cheaper pre-filter, not a replacement for watching:** `legged_robot.py`
+also logs a diagnostic-only metric, `actual_lin_vel_x` — the real
+time-averaged forward velocity in m/s (not the `tracking_lin_vel` reward,
+which is a similarity score against the commanded velocity, not the raw
+value). It shows up automatically as `Mean episode rew_actual_lin_vel_x` in
+the training log and in a checkpoint's `meta.json` metrics / the control
+web's chart — no parser changes needed, and it has zero effect on training
+(never added to the actual reward total). A near-zero average forward
+velocity is a strong signal a checkpoint never moved forward at all — cheap
+to check before spending a viewer session on it. But a nonzero value can
+also come from a fall-and-slide, not just real locomotion — it narrows down
+what's worth watching, it doesn't replace watching it.
+
+## Scale matters: `num_envs` and iteration budget aren't cosmetic knobs
+
+Two runs with the "same" reward function and roughly the same flags can
+produce wildly different policies depending on `num_envs` and how many
+iterations you actually give it. Two separate lessons, don't conflate them:
+
+1. **`num_envs` changes what an "iteration" means, it isn't just a speed
+   knob.** `num_envs=4096` is the documented community standard for Isaac
+   Gym / rsl_rl humanoid locomotion (confirmed against
+   [leggedrobotics/legged_gym](https://github.com/leggedrobotics/legged_gym)
+   and [unitreerobotics/unitree_rl_gym](https://github.com/unitreerobotics/unitree_rl_gym),
+   the exact upstream this fork descends from) — each iteration at 4096
+   envs collects ~64x more environment experience per PPO update than at
+   64 envs, so iteration counts are not comparable across different
+   `num_envs`. A run here with 10x more iterations than another, but at
+   `num_envs=64` instead of `4096`, still scored worse.
+2. **Even at the right `num_envs`, there's a real floor below which nothing
+   walks, and it's higher than a quick smoke test.** Confirmed here at
+   `num_envs=4096`: ~300 iterations is not enough for any directed
+   locomotion under command; commanded walking started to appear somewhere
+   between ~600 and ~900 iterations for one lineage; by ~1200 iterations a
+   real (if visually rough) walking gait was consistently present. This
+   doesn't mean 1200 is a universal floor — treat it as "several hundred is
+   confirmed not enough, low thousands is where it becomes plausible,"
+   not an exact number to target blindly.
+
+**Practical rule: `--num_envs 64` (rugiar's local default) is for
+smoke-testing the CLI/flags/reward wiring cheaply on a laptop CPU, never for
+a policy you actually want to be good.** For anything meant to walk/balance
+for real, use `--backend kaggle` with `--num_envs 4096`. Budgeting
+iterations: treat a few hundred as enough only to prove the pipeline runs,
+low thousands (1200-2000) as a realistic first checkpoint worth watching,
+and the full 5000-10000 (see "What to actually expect" below) as the target
+for gait *quality*, not "walks at all." Iteration cost is real regardless of
+target: at this repo's own measured ~5s/iteration at `num_envs=4096`, 1200
+iterations is ~1-1.5 hours, 5000 is **~7 hours**, and 10000 is **~14 hours**
+of GPU compute — a meaningful fraction of Kaggle's free ~30h/week quota.
+Budget accordingly.
+
+## What to actually expect as iteration count grows
+
+This section exists so nobody has to re-investigate community references
+from scratch every time a `g1` run looks rough — confirmed by comparing this
+repo's `g1_config.py` directly against `unitreerobotics/unitree_rl_gym`'s and
+researching community reports:
+
+- **~300 iterations (`num_envs=4096`): no directed locomotion at all is
+  normal.** Don't read anything into a checkpoint this young not walking.
+- **~600-900 iterations: walking can start to emerge**, per the confirmed
+  window above.
+- **~900-1500ish iterations: an ugly, "bunny hop"-style gait (repeated hops
+  instead of an alternating stride) is an EXPECTED intermediate stage, not a
+  sign of a broken config or bad reward shaping.** This is a documented
+  pattern in bipedal-locomotion RL literature — a temporary imbalance
+  between tracking reward and air-time/efficiency terms that a well-designed
+  reward (this repo's scales already match the `unitree_rl_gym` reference)
+  typically resolves with more training, not a redesign.
+- **Clean, non-hopping gait: budget toward the full reference target.**
+  `unitree_rl_gym` itself targets 10000 iterations for this exact task; a
+  comparable IsaacLab G1 project (different, larger MLP+curriculum setup)
+  used 16000 starting from an already-functional flat-ground gait. Nobody in
+  the community reports a clean gait this early — don't treat "still ugly at
+  1200-2000 iterations" as evidence something needs fixing before continuing
+  the same recipe further via `--from_policy` chunks.
+
+## `entropy_coef`: a real lever when gait quality plateaus
+
+This repo's own `g1_config.py` / `legged_robot_config.py` already default
+`entropy_coef` to `0.01`, matching the `unitree_rl_gym` community reference
+exactly — passing nothing keeps you at the community-standard exploration
+level. Don't assume you need to lower it; a lower value here was tried once
+early on and is not the reference setting.
+
+**If a checkpoint's gait *quality* plateaus across several chunks** (not
+just the reward number, which per "How to know if a checkpoint actually
+walks" above can plateau or move for unrelated reasons), **going above the
+0.01 default is a reasonable first experiment, ahead of any reward
+redesign.** Confirmed here: bumping to `0.02` from a plateaued, "bunny hop"
+checkpoint produced a large, directly-observed gait improvement — described
+on watching it as "almost able to run," a clear step up, though still
+visibly asymmetric. The reward/episode_length numbers for that checkpoint
+were unremarkable compared to the one before it — once again, only watching
+it revealed the jump.
+
+**Don't assume "more entropy = more improvement" scales linearly, though.**
+A follow-up test doubling again to `0.04` from the same improved checkpoint
+did not help further — this time the reward/episode_length numbers *and*
+direct observation agreed it was flat-to-worse (lower reward, lower
+episode_length, higher `noise_std`, no visible further improvement). One
+data point isn't enough to call `0.04` a firm ceiling for every lineage, but
+it's a caution against assuming a bigger jump automatically means a bigger
+improvement.
+
+Practical guidance for trying this:
+- **Always branch to a new name** (`--from_policy <base> --name <base>_hient`),
+  never overwrite the last good checkpoint — higher entropy can just as
+  easily make a gait more erratic ("epilepsia": non-productive, jittery
+  high-frequency motion) as it can help it escape a plateau.
+- **Watch the result before trusting either outcome**, same rule as always.
+- **Isolate the variable.** A prior attempt at high entropy on this repo's
+  local Mac/CPU/`num_envs=64` setup produced exactly that kind of chaotic
+  behavior — but that attempt changed entropy AND used too-few envs/
+  iterations at the same time (see "Scale matters" above), so it was never a
+  clean test of entropy alone. Test entropy changes at the reference
+  `num_envs=4096`, changing nothing else from a known-good base.
+
+## Configuring the display order (for a downstream control layer)
+
+`rugiar order` sets a catalog-wide display order for local policies —
+separate from training/fine-tuning, and separate from any one policy's own
+files. It exists so a **different app** — one that only *selects* among
+already-trained policies (e.g. a runtime control layer switching what's
+active on the robot) rather than training them — has something authoritative
+to read instead of inventing its own "newest first" or alphabetical opinion.
+`legged_gym.control.training.TrainingManager.get_policy_order()` /
+`.set_policy_order()` are the same calls in Python, for that app to use
+directly instead of shelling out.
+
+```bash
+rugiar order --show                                   # current order
+rugiar order --set <policy_a> <policy_b>               # pin these first
+rugiar train --list_policies                           # now printed in that order
+```
+
+- `--set` only needs to name the policies you want to *pin* — anything left
+  out keeps appearing afterward, alphabetically, so a freshly trained policy
+  is never silently hidden from the order.
+- Stored at `./policies/.policy_order.json` — a flat JSON list of names,
+  not inside any one `policies/<name>/` folder (order is a property of the
+  catalog, not of a policy) and not merged into `meta.json`.
+- `--set` with a name that isn't a real local policy fails fast with
+  `unknown local policy: <name>` — check spelling against
+  `rugiar train --list_policies` first.
+
+## Choosing a simulator per OS/target
+
+Simulator selection in this repo is **not** a single uniform switch — it's a
+property of *where the job runs*, driven by `legged_gym/__init__.py` (env var
+`SIMULATOR` for genesis/isaaclab) and, for Isaac Gym specifically, by which
+**Python interpreter** runs the job (`legged_gym/__init__.py` hardcodes
+`SIMULATOR="isaacgym"` for any interpreter `<=3.8`, and rejects the string
+`"isaacgym"` outright on `>=3.10`). `switch_simulator.sh` (repo root)
+automates this locally via three conda envs (`lr_gym`, `lr_gen`, `lr_lab`).
+
+| Where you're training | Simulator | Why |
+|---|---|---|
+| **macOS** (Apple Silicon or Intel, no NVIDIA GPU) | **Genesis** — `SIMULATOR=genesis` | The only one of the three that runs with no GPU at all; this is what the whole repo was built and proven on (README §1/§2). CPU-only works fine; Genesis's Metal GPU path on macOS was flaky enough that it isn't depended on. |
+| **Linux, no NVIDIA GPU / CPU-only** | **Genesis** — `SIMULATOR=genesis` | Same as macOS — Genesis is CPU-portable, IsaacGym/IsaacLab are not. |
+| **Linux with an NVIDIA GPU** | **Genesis** (`SIMULATOR=genesis`, `GENESIS_BACKEND=cuda` if using Docker Compose's GPU overlay) for the same setup everywhere, **or IsaacGym** (needs a Python **≤3.8** env — `switch_simulator.sh isaacgym` / conda env `lr_gym`) **or IsaacLab** (`SIMULATOR=isaaclab`, Python ≥3.10, `pip install -e .[isaaclab]`) if you specifically need one of those ecosystems | All three are real options on Linux+NVIDIA; Genesis stays the simplest (same commands as Mac), IsaacGym/IsaacLab are there for parity with the upstream `unitree_rl_gym` pipeline. |
+| **Windows** | Not natively documented — use **Docker Compose** (`docker compose up --build`, works via Docker Desktop/WSL2 on any host arch) | Same recommended path as any host where a native Python+Genesis setup is inconvenient; see README §2 "Docker Compose". |
+| **Kaggle (cloud GPU)** | **IsaacGym**, always — regardless of what `SIMULATOR` is set to locally | `rugiar train --backend kaggle` bootstraps its own throwaway Python 3.8 + Isaac Gym venv *inside the Kaggle kernel* (see `legged_gym/control/kaggle_backend.py`). Kaggle's free tier hands out a Pascal (sm_60) GPU — Genesis's GPU JIT needs Volta+ (sm_70+) and cannot run there at all, while Isaac Gym's PhysX GPU pipeline works on Pascal and gets a genuine speedup (confirmed, see `HANDOFF_kaggle_cloud_gpu.md`). Your local `--backend local` runs still use whatever `SIMULATOR` you have set — the two are independent. |
+
+`rugiar train`'s own `--backend {local,kaggle}` only picks *where the job
+runs*; for `local` it inherits whatever `SIMULATOR` is currently exported —
+it does not itself switch simulators, so get the environment right first
+(`switch_simulator.sh` or `export SIMULATOR=...`) before running a local job.
+
+## Setting up Kaggle for cloud training
+
+One-time setup, then every future `--backend kaggle` job just works:
+
+1. **Create a free Kaggle account** at kaggle.com if you don't have one.
+2. **Verify your phone number** — Settings → Phone Verification. This is
+   required to unlock Kaggle's GPU quota (free tier gives ~30 GPU-hours/week);
+   without it, kernels run CPU-only or fail to start.
+3. **Create an API token** — click your avatar → *Settings* → *API* section →
+   **Create New Token**. This downloads a `kaggle.json` file.
+4. **Install it locally**:
+   ```bash
+   mkdir -p ~/.kaggle
+   mv ~/Downloads/kaggle.json ~/.kaggle/kaggle.json
+   chmod 600 ~/.kaggle/kaggle.json
+   ```
+5. **Install the `kaggle` package** (only needed for the Kaggle backend):
+   ```bash
+   pip install -e .[cloud]     # or: pip install kaggle
+   ```
+6. **Verify credentials are picked up**:
+   ```bash
+   python3 -c "from legged_gym.control.kaggle_backend import kaggle_credentials_available; print(kaggle_credentials_available())"
+   # should print True
+   ```
+7. **Train on Kaggle**:
+   ```bash
+   export SIMULATOR=genesis   # still required locally, even though the job itself runs isaacgym remotely
+   rugiar train --task g1 --name cloud_walk --max_iterations 1000 --backend kaggle
+   ```
+
+Things worth knowing about Kaggle jobs specifically:
+
+- **The Kaggle kernel clones this repo fresh from GitHub** (it's public) at
+  push time — a Kaggle job trains whatever is on the remote `main` branch's
+  HEAD, **not your uncommitted local changes**. Commit and push first if you
+  need a specific change reflected in a cloud run.
+- **Isaac Gym bootstrap costs ~3-4 minutes** before training even starts —
+  normal, not a hang.
+- Kaggle enforces a **~6-hour session cap**; `rugiar` bails out well before
+  that so a stuck kernel can't wedge the wait loop forever.
+- `--from_policy NAME` works with `--backend kaggle` too — the local
+  policy's checkpoint is uploaded as a private Kaggle Dataset automatically.
+- A Kaggle-trained policy's `meta.json` records `"simulator": "isaacgym"` —
+  it's a genuine sim2sim transfer relative to this repo's Genesis-trained
+  policies (different contact/PD dynamics), not guaranteed identical
+  behavior. `rugiar train --list_policies` doesn't show this — check
+  `policies/<name>/meta.json` or the control web's info popup.
+- No credentials found → `rugiar` (via `TrainingManager.start()`) fails
+  fast with a clear error before launching anything; re-run steps 1-6 above.
+
+## Running a long training job unattended (background execution has a time ceiling)
+
+Confirmed empirically (repeatedly, the hard way): when `rugiar train` runs as a
+background process under an agent/CLI orchestrator (e.g. launched via a coding
+agent's background-bash tool), **the process gets killed after roughly 28-30
+minutes of wall-clock time — even while actively producing output**, with no error
+from `rugiar`/Python itself (external SIGKILL, not a crash). This is a property of
+the orchestrating environment, not of `rugiar`, Genesis, or Kaggle — it applies
+identically to local CPU runs and to `--backend kaggle` runs (the LOCAL `rugiar`
+process still has to stay alive the whole time to poll Kaggle and download/finalize
+the result, even though the actual GPU compute happens remotely).
+
+**The fix: chunk any run expected to take longer than ~20-25 minutes into multiple
+`rugiar train` calls chained with `--from_policy`, each sized to finish comfortably
+under that ceiling**, e.g.:
+
+```bash
+# chunk 1: from scratch
+rugiar train --task g1 --name walk_c1 --max_iterations 1000 ...
+
+# chunk 2: continues from chunk 1's checkpoint — iteration count in the log/meta.json
+# is cumulative (counted from wherever --from_policy resumed), so "1000" here means
+# +1000 more, landing at 2000 total
+rugiar train --task g1 --name walk_c2 --from_policy walk_c1 --max_iterations 1000 ...
+
+# final chunk — reuse the name you actually want to keep
+rugiar train --task g1 --name walk --from_policy walk_c2 --max_iterations 1000 ...
+```
+
+- Pick a chunk size empirically from the first chunk's `elapsed_s` in its
+  `meta.json` — if it took 830s for 1000 iterations, ~1000-1200 iterations per
+  chunk leaves comfortable margin under the ceiling.
+- If a chunk itself gets killed mid-run (it will happen — the exact ceiling seems
+  to have some jitter), it leaves **nothing registered** (same as Ctrl-C) — just
+  retry the exact same command; nothing was corrupted, you only lose that chunk's
+  partial progress since its last internal checkpoint save.
+- Once a later chunk successfully continues from an intermediate `_c1`/`_c2`-style
+  policy, that intermediate is safe to delete — the final one's `train_checkpoint.pt`
+  already contains that lineage. Worth keeping them around instead if you want to
+  compare checkpoints across the chunk boundaries later (e.g. to find where a
+  behavior first appeared) — that comparison is free since the files are already
+  on disk, it just costs some local storage.
+- `caffeinate -is <command>` (macOS) is worth wrapping around a local run left
+  overnight so the machine itself doesn't sleep mid-chunk — unrelated to the
+  ~28-30min ceiling above, but a real second way to lose an unattended run.
+- This ceiling is exactly why the previous section says budget iterations in the
+  thousands via **chunking**, not by asking for one giant `--max_iterations 10000`
+  call and expecting it to run overnight unattended in one shot — it won't.
+
+## Training a crouched-but-mobile policy
+
+There is **no dedicated crouch task** — a `g1_crouch` task existed briefly with an
+open-ended "as low as it can sustain" reward term, but it was removed (dead/orphaned
+code, never worth the extra task class). Everything below is achieved on the plain
+`g1` task purely through `rugiar train`'s existing flags — `--base_height_target`,
+`--from_policy`, iteration budget. No reward-term surgery needed.
+
+**A real failure, so you don't repeat it:** fine-tuning `--base_height_target` down
+AND (re-)enabling the full command/push envelope, in the SAME short fine-tune run,
+crashed a real lineage here — reward and `Mean episode length` both collapsed
+(491 → 150 steps) and never recovered in the few minutes/iterations given. A
+following short "fix" run that boosted `--reward_scale tracking_lin_vel` recovered
+the *reward number* (falls make short bursts of high per-step reward look fine in
+the log) without recovering actual stability — `Mean episode length` stayed low.
+**Reward went up while the robot was still falling constantly — always read reward
+and episode length together, never reward alone**, and watch it directly before
+trusting a checkpoint.
+
+What actually works:
+
+```bash
+# fine-tune an already-good WALKING base (not a static/zero-velocity one) toward a
+# slightly lower stance, keeping the full command envelope it already knows
+rugiar train --task g1 --name walk_crouch --from_policy <a policy that already walks well> \
+    --max_iterations 800 \
+    --base_height_target 0.72 \
+    --entropy_coef 0.001
+```
+
+- **Base choice matters more than any flag — and `episode_length` alone is NOT
+  enough evidence a base "already walks well."** A checkpoint here scored near
+  the best externally-confirmed reference on `episode_length` alone and was
+  still reported not to take a single step under a full-forward command — see
+  "How to know if a checkpoint actually walks" above. Confirm a base actually
+  walks by watching it before spending a fine-tune run on top of it, not just
+  by reading its `meta.json`.
+- **Move the target gently, not aggressively** — a few % off whatever height the
+  base already trained at (check its `meta.json` command, or the task's own
+  default), not a guessed round number far away from it.
+- **Don't change the command/push envelope in the same run** as the height-target
+  change — inherit whatever the base already trained under (leave `--cmd_*_range`/
+  `--push_robots` unset) unless you're deliberately budgeting extra iterations for
+  BOTH adjustments to converge.
+- **Give it real iterations** — the 800 above is illustrative of the FLAGS, not a
+  proven-sufficient budget; per "Scale matters," treat a few hundred iterations as
+  "enough to prove the pipeline runs," not "enough to trust the result."
+- **Don't reach for `--reward_scale tracking_lin_vel` as a first move** — a spiking
+  reward with flat/low episode length is a sign to look at stability, not turn up
+  velocity-tracking pressure further.
+
+### Training the WALKING base itself from scratch (not fine-tuning a height target)
+
+If there's no existing good base to fine-tune from and you're training from random
+init, **don't stage it as "learn to walk WITHOUT pushes first, then add pushes in a
+separate later fine-tune."** A real attempt at that here got stuck — after the
+initial push-free stage looked fine (episode_length 285), turning `--push_robots on`
+in a follow-up fine-tune collapsed it (episode_length 285 → ~90) and it did NOT
+recover even after 3x more iterations at that stage, plateauing around 90-130.
+
+This matches upstream: `unitree_rl_gym`'s own `G1RoughCfg.domain_rand` config has
+`push_robots = True` **from iteration 0**, not introduced later — the policy learns
+balance and push-recovery jointly across the whole run instead of specializing on a
+push-free task first and then having to unlearn that specialization under a sudden
+distribution shift. Prefer:
+
+```bash
+# --push_robots on (or just leave it — it's the task's own default already, see
+# G1RoughCfg.domain_rand.push_robots = True) from the very first chunk, not added
+# later. 1500 here is one CHUNK (see "Running a long training job unattended") —
+# chain several of these via --from_policy toward the thousands before expecting a
+# real gait, per "Scale matters" and "What to actually expect" above.
+rugiar train --task g1 --name walk_c1 --backend kaggle --num_envs 4096 \
+    --max_iterations 1500 --entropy_coef 0.01
+```
+
+General curriculum-learning literature (see Sources) does support *gradually*
+ramping up domain-randomization difficulty (terrain roughness, friction range) to
+avoid early-learning collapse — but for the specific push perturbation on this
+specific robot, the proven reference config is "on from the start," not a staged
+curriculum. Follow the reference config over generic theory when they disagree.
+
+## Common recipes
+
+The `--max_iterations` values below (500-1200) illustrate WHICH FLAGS to combine
+for each goal, not a proven-sufficient training budget — per "Scale matters"
+above, treat every one of these as a starting chunk to chain further (via
+`--from_policy`) and verify by watching, not a finished recipe to trust as-is.
+
+```bash
+# crouch instead of walk: zero velocity commands, target a lower base height
+# (a policy with zero-velocity commands is a much easier target than full
+# locomotion — this one may need proportionally fewer iterations to look right,
+# but "look right" still means watched, not assumed)
+rugiar train --task g1 --name crouch --max_iterations 1000 \
+    --cmd_vx_range 0 0 --cmd_vy_range 0 0 --cmd_yaw_range 0 0 \
+    --base_height_target 0.45
+
+# cautious gait: penalize torque/joint-velocity harder from an existing base
+rugiar train --task g1 --name cautious --from_policy <existing_policy> \
+    --max_iterations 800 --reward_scale torques -0.001 --reward_scale dof_vel -0.01
+
+# push-robustness training, pushes biased from behind
+rugiar train --task g1 --name push_robust --max_iterations 1200 \
+    --push_robots on --max_push_vel_xy 1.5 --push_interval_s 4 --push_dir behind
+
+# lower PPO exploration noise if 'Mean action noise std' was trending up last run
+rugiar train --task g1 --name retrain --from_policy retrain \
+    --max_iterations 500 --entropy_coef 0.001
+```
+
+## Troubleshooting
+
+- **Before declaring ANY checkpoint good, watch it** — this is the single most
+  important entry in this list, see "How to know if a checkpoint actually walks"
+  above. `rugiar`/the web UI never do this for you. For a checkpoint that still
+  has its raw training run under `logs/<task>/<run>/` (not yet cleaned up), use
+  `play.py --viewer=viser` (see the `rugiar-movement` skill).
+  `<run>` is the `Aug09_...`-style directory name under `logs/g1/` (the raw
+  checkpoint's source; a policy's `meta.json` doesn't store this path directly —
+  it's whatever `logs/<task>/` directory has a timestamp matching when that
+  policy finished, or check `job.command`/`source_log_dir` in an older meta.json
+  that still has one).
+- **`ValueError: Unsupported SIMULATOR type...`** → `export SIMULATOR=genesis`
+  (or `isaaclab`) before anything else — see "Prerequisite" above.
+- **`give at least one of --max_iterations / --max_minutes`** → both are
+  optional individually but at least one stopping condition is required.
+- **`unknown reward scale(s) for task '<task>': ...`** → run
+  `rugiar train --task <task> --list_reward_scales` to see valid names and
+  current defaults for that task before retrying `--reward_scale`.
+- **`unknown base policy '<name>'` / fine-tuning fails** → run
+  `rugiar train --list_policies`; only entries with `fine-tunable=yes` (i.e.
+  they have a `train_checkpoint.pt`) work with `--from_policy`.
+- **`RuntimeError: Attempting to deserialize object on a CUDA device but
+  torch.cuda.is_available() is False`** on a **local** `--from_policy` run →
+  the base policy's `train_checkpoint.pt` was saved on a CUDA device (check
+  `policies/<name>/meta.json`'s `"simulator"` — `isaacgym` almost always
+  means it was trained via `--backend kaggle`, GPU), and this machine has no
+  GPU. `torch.load()` can't remap that on its own. Fix: either pick a base
+  policy that was itself trained `--backend local` on THIS machine (`meta.json`
+  has `"simulator": null`/`"genesis"`, `num_envs` in the tens not thousands),
+  or fine-tune with `--backend kaggle` too (uploads the base checkpoint and
+  continues training on a GPU, avoiding the CPU reload entirely) — see
+  `rugiar train --list_policies` and check each candidate's `meta.json`
+  before picking a base for a local run.
+- **`no Kaggle credentials found at ~/.kaggle/kaggle.json`** → follow
+  "Setting up Kaggle for cloud training" above.
+- **`rugiar distill` fails with `RuntimeError: Expected hidden[0] size (1, 64, 64), got [1, 1, 64]`**
+  (or similar) → the teacher is batch-locked to 1 (an externally-sourced,
+  unitree_rl_gym-style export) — retry with `--num_envs 1` (this is already the
+  CLI/UI default; only hits this if it was explicitly raised). See "Distilling
+  policies" above.
+- **A distilled policy doesn't walk like its teacher** → check
+  `policies/<name>/meta.json`'s `distillation.final_bc_loss` first. High
+  (>~0.1) after a low `--rollout_steps`/`--bc_epochs` test run just needs the
+  real defaults (4000/20) re-run. Still high at the full defaults → likely an
+  obs-convention mismatch with that specific teacher (dimension match ≠
+  semantic match) — see "Distilling policies" above, and always watch it walk
+  before trusting it, same as any other checkpoint.
+- Job failed with a subprocess exit code → the error message names the exact
+  log file (`logs/_web_training/<job_id>.log`) — `rugiar` already streamed it
+  live, but it's still there to re-read.
+- **`episode_length` stuck flat/low across several fine-tune chunks in a row**
+  (checked its trend across ≥2-3 chunks' `meta.json`, not just one) → don't push
+  further down the same recipe (e.g. don't proceed to a height-target change on top
+  of an already-unstable push-adapted policy) — it's usually an undersized
+  `num_envs`/iteration budget for the distribution shift just introduced, not
+  something more iterations at the same tiny scale will fix. Move to
+  `--backend kaggle --num_envs 4096` instead of throwing more low-`num_envs`
+  iterations at it.
+- **A freshly trained/fused/distilled policy doesn't appear in a running control
+  web** → see the `rugiar-management` skill's "Picking up policies trained outside
+  the web" section (Refresh button vs. full restart).
+
+## Sources
+
+Community/upstream references consulted while writing the guidance above (num_envs,
+iteration budget, push-curriculum timing, entropy_coef) — re-check these if
+upstream configs change:
+
+- [leggedrobotics/legged_gym](https://github.com/leggedrobotics/legged_gym) — the
+  original ETH Zurich RSL project this fork and `rsl_rl` descend from.
+- [unitreerobotics/unitree_rl_gym](https://github.com/unitreerobotics/unitree_rl_gym)
+  — the direct upstream for this repo's G1 task; its
+  [`g1_config.py`](https://github.com/unitreerobotics/unitree_rl_gym/blob/main/legged_gym/envs/g1/g1_config.py)
+  and
+  [`legged_robot_config.py`](https://github.com/unitreerobotics/unitree_rl_gym/blob/main/legged_gym/envs/base/legged_robot_config.py)
+  are the source for `push_robots = True` from the start, `max_iterations = 10000`,
+  and `entropy_coef = 0.01`.
+- General curriculum-domain-randomization practice (gradual difficulty ramp to
+  avoid early-learning collapse, contrasted above with the G1-specific reference
+  config's "pushes on from the start") — see the curriculum-learning literature
+  survey results for legged robots; no single canonical source, treat as
+  background context rather than a specific citation.
+- Bipedal-locomotion RL literature on the "bunny hop" intermediate-stage pattern
+  (temporary tracking-vs-air-time reward imbalance) and comparable IsaacLab G1
+  training budgets — background context, not a single canonical source.
