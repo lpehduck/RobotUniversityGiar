@@ -21,9 +21,13 @@ TRAIN_SCRIPT = REPO_ROOT / "legged_gym" / "scripts" / "web_train.py"
 # neither venv can import the other's simulator (docs/mjlab_migration.md R1),
 # so this is an interpreter choice, not just a script choice. Mirrors
 # rugiar_driver_mjlab.py's _script_for_task()/_argv_for_family_switch() pair.
+import sys
+
+_py_rel = Path("Scripts") / "python.exe" if sys.platform == "win32" else Path("bin") / "python"
 MJLAB_TRAIN_SCRIPT = REPO_ROOT / "legged_gym" / "scripts" / "mjlab_train.py"
-MJLAB_PYTHON = REPO_ROOT / ".venv-mjlab" / "bin" / "python"
-GENESIS_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
+MJLAB_PYTHON = REPO_ROOT / ".venv-mjlab" / _py_rel
+GENESIS_PYTHON = REPO_ROOT / ".venv" / _py_rel
+
 
 
 @dataclasses.dataclass(frozen=True)

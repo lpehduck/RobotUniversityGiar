@@ -206,17 +206,19 @@ def _build_train_parser(subparsers: argparse._SubParsersAction) -> argparse.Argu
     return p
 
 
+_py_rel = "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+
 DRIVE_PRESETS = {
     "genesis": {
         "script": "legged_gym/scripts/rugiar_driver.py",
-        "python": ".venv/bin/python",
+        "python": f".venv/{_py_rel}",
         "default_task": "g1",
         "env": {"SIMULATOR": "genesis"},
         "extra_args": [],
     },
     "mjlab": {
         "script": "legged_gym/scripts/rugiar_driver_mjlab.py",
-        "python": ".venv-mjlab/bin/python",
+        "python": f".venv-mjlab/{_py_rel}",
         "default_task": "Rugiar-G1-Mimic",
         # CUDA_VISIBLE_DEVICES="" matches this driver's own documented launch line
         # (see rugiar_driver_mjlab.py's module docstring) -- this repo's mjlab setup
@@ -321,16 +323,17 @@ def _stop_listening_on(port: int, label: str = "process") -> list:
     print(f"[rugiar] stopping {label} on port {port}: pid(s) {existing}")
     for pid in existing:
         try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
+            os.kill(pid, getattr(signal, "SIGTERM", signal.SIGINT))
+        except (ProcessLookupError, AttributeError):
             pass
     deadline = time.time() + 8
     while time.time() < deadline and _pids_listening_on(port):
         time.sleep(0.3)
     for pid in _pids_listening_on(port):
         try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
+            sig = getattr(signal, "SIGKILL", signal.SIGTERM)
+            os.kill(pid, sig)
+        except (ProcessLookupError, AttributeError):
             pass
     return existing
 
@@ -402,6 +405,10 @@ def run_drive(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if not args.headless:
         print(f"[rugiar] control web: http://localhost:{args.control_port}/")
     os.chdir(repo_root)
+    if sys.platform == "win32":
+        import subprocess
+        res = subprocess.run(argv, env=env)
+        return res.returncode
     os.execvpe(argv[0], argv, env)  # replaces this process -- Ctrl-C behaves exactly like a direct launch
     return 0  # unreachable, execvpe never returns on success
 

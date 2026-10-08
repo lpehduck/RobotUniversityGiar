@@ -1,0 +1,6 @@
+{
+  "task": "g1",
+  "trained_via": "colab-gpu",
+  "simulator": "genesis",
+  "note": "Imported from Google Colab GPU training for Genesis simulator."
+}
