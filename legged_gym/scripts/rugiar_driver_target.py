@@ -230,12 +230,22 @@ def _spawn_or_exec(argv: list, env: dict) -> None:
     a broken relaunch target can't wedge the current session. All exit
     paths skip interpreter cleanup, so callers must flush stdout/stderr
     first (see _relaunch_for_family())."""
+    if sys.platform == "win32":
+        print("[relaunch] Windows detected -- spawning fresh process and exiting")
+        if sys.stdout is not None:
+            sys.stdout.flush()
+        if sys.stderr is not None:
+            sys.stderr.flush()
+        subprocess.Popen(argv, env=env)
+        os._exit(0)
     try:
         os.execve(argv[0], argv, env)  # replaces this process -- never returns on success
     except OSError:
         print("[relaunch] execve failed -- falling back to spawn+exit")
-        sys.stdout.flush()
-        sys.stderr.flush()
+        if sys.stdout is not None:
+            sys.stdout.flush()
+        if sys.stderr is not None:
+            sys.stderr.flush()
         subprocess.Popen(argv, start_new_session=True, env=env)
         os._exit(0)  # immediate -- release the port now, no cleanup needed
 
@@ -315,8 +325,10 @@ def _relaunch_for_family(cli: argparse.Namespace, new_task: str, adapter=None) -
         if cli.token:
             argv += ["--token", cli.token]
     print(f"[family switch] relaunching for task {new_task!r}: {' '.join(argv)}")
-    sys.stdout.flush()  # the exit paths below skip normal interpreter cleanup, which would
-    sys.stderr.flush()  # otherwise silently drop this line when stdout is a redirected file
+    if sys.stdout is not None:
+        sys.stdout.flush()  # the exit paths below skip normal interpreter cleanup, which would
+    if sys.stderr is not None:
+        sys.stderr.flush()  # otherwise silently drop this line when stdout is a redirected file
     _spawn_or_exec(argv, env)
 
 

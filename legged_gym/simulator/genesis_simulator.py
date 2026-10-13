@@ -424,7 +424,6 @@ class GenesisSimulator(Simulator):
                 shadow=False,
                 ),
             rigid_options=gs.options.RigidOptions(
-                dt=self._sim_params["dt"],
                 constraint_solver=gs.constraint_solver.Newton,
                 enable_collision=True,
                 enable_joint_limit=True,
@@ -454,7 +453,7 @@ class GenesisSimulator(Simulator):
             self._create_trimesh()
         else:
             raise ValueError(f"Unsupported terrain mesh type: {mesh_type}")
-        self._gs_terrain.set_friction(self._cfg.terrain.static_friction)
+
         # specify the boundary of the heightfield
         self._terrain_x_range = torch.zeros(2, device=self._device)
         self._terrain_y_range = torch.zeros(2, device=self._device)
@@ -535,6 +534,8 @@ class GenesisSimulator(Simulator):
             self._scene.build = patched_build
         # Build the scene
         self._scene.build(n_envs=self._num_envs)
+        if hasattr(self, "_gs_terrain") and self._gs_terrain is not None:
+            self._gs_terrain.set_friction(self._cfg.terrain.static_friction)
 
         self._get_env_origins()
         self._finalize_props()
@@ -1057,7 +1058,14 @@ class GenesisSimulator(Simulator):
         added_mass = gs.rand((len(env_ids), 1), dtype=float) * \
             (max_mass - min_mass) + min_mass
         self._added_base_mass[env_ids] = added_mass[:].detach().clone()
-        self._robot.set_mass_shift(added_mass, self._base_link_index, env_ids)
+        if hasattr(self._robot, "set_mass_shift"):
+            self._robot.set_mass_shift(added_mass, self._base_link_index, env_ids)
+        elif hasattr(self._robot, "set_links_mass"):
+            try:
+                base_mass = self._robot.get_links_mass(links_idx_local=[self._base_link_index], envs_idx=env_ids)
+                self._robot.set_links_mass(base_mass + added_mass, links_idx_local=[self._base_link_index], envs_idx=env_ids)
+            except Exception:
+                pass
 
     def _randomize_com_displacement(self, env_ids):
         ''' Randomize center of mass displacement of the robot'''
@@ -1076,8 +1084,16 @@ class GenesisSimulator(Simulator):
         self._base_com_bias[env_ids] = com_displacement[:,
                                                         0, :].detach().clone()
 
-        self._robot.set_COM_shift(
-            com_displacement, self._base_link_index, env_ids)
+        if hasattr(self._robot, "set_COM_shift"):
+            self._robot.set_COM_shift(
+                com_displacement, self._base_link_index, env_ids)
+        elif hasattr(self._robot, "set_links_COM"):
+            try:
+                base_com = self._robot.get_links_COM(links_idx_local=[self._base_link_index], envs_idx=env_ids)
+                self._robot.set_links_COM(
+                    base_com + com_displacement, links_idx_local=[self._base_link_index], envs_idx=env_ids)
+            except Exception:
+                pass
 
     def _randomize_joint_armature(self, env_ids):
         env_ids = torch.as_tensor(env_ids, device=self._device)
