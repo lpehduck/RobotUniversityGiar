@@ -37,7 +37,7 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-REPO_URL = "https://github.com/GIAR-UTN/RobotUniversityGiar.git"
+REPO_URL = "https://github.com/lpehduck/RobotUniversityGiar.git"
 DEFAULT_BRANCH = "main"
 POLL_INTERVAL_S = 15  # how often this thread (never the sim thread) checks kernels_status
 # Kaggle's own GPU session cap is ~12h; bail well before that so a stuck/orphaned
